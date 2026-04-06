@@ -667,6 +667,7 @@ function AppContent() {
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
+      showToast("Successfully logged in!");
       setShowLoginSuccess(true);
       setTimeout(() => setShowLoginSuccess(false), 4000);
     } catch (error: any) {
@@ -1272,7 +1273,8 @@ function AppContent() {
   };
 
   const verifyRemittance = async (remId: string) => {
-    if (profile?.role !== 'admin') return;
+    const isExecutive = profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com';
+    if (profile?.role !== 'admin' && !isExecutive) return;
     
     showToast("Verifying remittance and sending email...");
     try {
@@ -2922,15 +2924,17 @@ function AppContent() {
                           <span className="inline-block animate-wave origin-[70%_70%]">👋</span>
                         </h1>
                         <p className="text-blue-100 text-sm md:text-base font-medium leading-relaxed opacity-90">
-                          Here's what's happening with the Faculty Club finances today. You have {remittances.filter(r => r.status === 'pending').length} pending remittances to verify.
+                          Here's what's happening with the Faculty Club finances today. {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com') && `You have ${remittances.filter(r => r.status === 'pending').length} pending remittances to verify.`}
                         </p>
                         <div className="flex flex-wrap gap-3 mt-8">
                           <button onClick={() => setActiveTab('collection')} className="bg-white text-[#0038A8] px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg">
                             Manage Collections
                           </button>
-                          <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all">
-                            View Remittances
-                          </button>
+                          {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
+                            <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all">
+                              View Remittances
+                            </button>
+                          )}
                         </div>
                       </div>
                       
@@ -4162,7 +4166,7 @@ function AppContent() {
                       <th className="pb-4">Grade</th>
                       <th className="pb-4">Amount (₱)</th>
                       <th className="pb-4">Status</th>
-                      {profile.role === 'admin' && <th className="pb-4 text-right pr-4">Action</th>}
+                      {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && <th className="pb-4 text-right pr-4">Action</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -4181,7 +4185,7 @@ function AppContent() {
                             {rem.status}
                           </span>
                         </td>
-                         {profile.role === 'admin' && (
+                         {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
                           <td className="py-4 text-right pr-4 flex items-center justify-end gap-3">
                             {rem.status === 'pending' ? (
                               <button 
@@ -4242,7 +4246,7 @@ function AppContent() {
                       <span className="text-gray-500 text-xs">{rem.timestamp?.toDate().toLocaleDateString()}</span>
                       <span className="font-black text-[#0038A8]">₱{rem.amount.toFixed(2)}</span>
                     </div>
-                    {profile.role === 'admin' && (
+                    {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
                       <div className="pt-3 border-t border-gray-50 flex justify-end gap-3">
                         {rem.status === 'pending' ? (
                           <button 
