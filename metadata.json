@@ -1,0 +1,5 @@
+{
+  "name": "LPCAA NHS Faculty Club Dues Management",
+  "description": "A comprehensive system for managing faculty dues, voluntary contributions, and expenses for LPCAA NHS Faculty Club.",
+  "requestFramePermissions": ["camera"]
+}
