@@ -149,7 +149,7 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow create: if isAuthenticated();
       allow update: if false;
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
   }
 }

@@ -1074,6 +1074,10 @@ function AppContent() {
   };
 
   const clearAuditLogs = async () => {
+    if (profile?.role !== 'admin') {
+      showToast("Unauthorized: Only Admins can clear logs.");
+      return;
+    }
     if (!window.confirm("Are you sure you want to clear all transparency logs? This action cannot be undone.")) return;
     try {
       const batch = writeBatch(db);
@@ -2809,12 +2813,17 @@ function AppContent() {
           </div>
           <h1 className="text-lg font-black tracking-tight">Las Piñas CAA</h1>
         </div>
-        <button 
-          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-          className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-colors"
-        >
-          {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={handleLogout} className="p-2 bg-white/10 rounded-xl hover:bg-red-500/20 transition-colors">
+            <LogOut size={24} />
+          </button>
+          <button 
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-colors"
+          >
+            {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+          </button>
+        </div>
       </header>
 
       {/* Sidebar Navigation */}
