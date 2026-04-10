@@ -19,6 +19,7 @@
       "properties": {
         "name": { "type": "string" },
         "email": { "type": "string" },
+        "gender": { "type": "string", "enum": ["Male", "Female"] },
         "contactNumber": { "type": "string" },
         "gradeLevel": { "type": "string", "enum": ["Grade 7", "Grade 8", "Grade 9", "Grade 10"] },
         "paidDueIds": { "type": "array", "items": { "type": "string" } },
@@ -87,6 +88,19 @@
         "type": { "type": "string", "enum": ["info", "warning", "critical"] }
       },
       "required": ["action", "timestamp", "userId"]
+    },
+    "InitialBalance": {
+      "title": "InitialBalance",
+      "description": "Remaining budget from previous terms/years",
+      "type": "object",
+      "properties": {
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" }
+      },
+      "required": ["amount", "timestamp", "adminId"]
     }
   },
   "firestore": {
@@ -110,9 +124,17 @@
       "schema": "Expense",
       "description": "Club expenditure records"
     },
+    "/initial_balances/{balanceId}": {
+      "schema": "InitialBalance",
+      "description": "Carry-over budget from previous terms"
+    },
     "/audit_logs/{logId}": {
       "schema": "AuditLog",
       "description": "System activity logs"
+    },
+    "/settings/{settingId}": {
+      "schema": "object",
+      "description": "System settings like signatories"
     }
   }
 }

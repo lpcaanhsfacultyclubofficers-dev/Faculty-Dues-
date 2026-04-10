@@ -3,10 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, Component } from 'react';
-import { Sun, Check, Send, Plus, User, Mail, PhilippinePeso, Heart, Upload, Trash2, FileText, FileDown, ChevronDown, ChevronUp, Loader2, LogOut, Shield, BarChart3, Wallet, Search, X, ShieldAlert, Lock, Eye, EyeOff, Users, CheckCircle, Clock, ChevronLeft, ChevronRight, AlertCircle, AlertTriangle, Database, QrCode, Download, CreditCard, Activity, Menu, LayoutDashboard, Settings, History, PieChart, TrendingUp, ArrowUpRight, ArrowDownRight, Filter } from 'lucide-react';
+import React, { useState, useEffect, useMemo, Component, useRef } from 'react';
+import { Sun, Check, Send, Plus, User, Mail, PhilippinePeso, Heart, Upload, Trash2, FileText, FileDown, ChevronDown, ChevronUp, Loader2, LogOut, Shield, BarChart3, Wallet, Search, X, ShieldAlert, Lock, Eye, EyeOff, Users, CheckCircle, Clock, ChevronLeft, ChevronRight, AlertCircle, AlertTriangle, Database, QrCode, Download, CreditCard, Activity, Menu, LayoutDashboard, Settings, History, PieChart, TrendingUp, ArrowUpRight, ArrowDownRight, Filter, RefreshCw, Camera, ShieldCheck, MailWarning, Archive, FileBarChart } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { QRCodeCanvas } from 'qrcode.react';
+import { 
+  PieChart as RePieChart, Pie, Cell, 
+  LineChart as ReLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer,
+  ComposedChart, Bar, Area
+} from 'recharts';
 import { 
   Document, 
   Packer, 
@@ -18,6 +23,7 @@ import {
   AlignmentType, 
   HeadingLevel, 
   TextRun, 
+  ImageRun,
   PageOrientation, 
   BorderStyle,
   VerticalAlign,
@@ -34,6 +40,8 @@ import {
 import type { User as FirebaseUser } from './firebase';
 
 import { Html5Qrcode } from 'html5-qrcode';
+
+const SUN_LOGO_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjRkNEMTE2IiBzdHJva2U9IiNGQ0QxMTYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI0Ii8+PHBhdGggZD0iTTEyIDJ2MiIvPjxwYXRoIGQ9Ik0xMiAyMHYyIi8+PHBhdGggZD0ibTQuOTMgNC45MyAxLjQxIDEuNDEiLz48cGF0aCBkPSJtMTcuNjYgMTcuNjYgMS40MSAxLjQxIi8+PHBhdGggZD0iTTIgMTJoMiIvPjxwYXRoIGQ9Ik0yMCAxMmgyIi8+PHBhdGggZD0ibTYuMzQgMTcuNjYtMS40MSAxLjQxIi8+PHBhdGggZD0ibTE5LjA3IDQuOTMtMS40MSAxLjQxIi8+PC9zdmc+`;
 
 type GradeLevel = 'Grade 7' | 'Grade 8' | 'Grade 9' | 'Grade 10';
 
@@ -53,6 +61,7 @@ type TeacherRecord = {
   lastName?: string;
   firstName?: string;
   middleInitial?: string;
+  gender?: 'Male' | 'Female';
   email: string;
   contactNumber: string;
   gradeLevel: GradeLevel;
@@ -66,7 +75,9 @@ type TeacherRecord = {
   pendingDeletion?: boolean;
   deletionRequestedBy?: string;
   lastUpdated?: string;
-  paymentHistory?: { dueId: string, dueName: string, date: string, amount: number }[];
+  paymentHistory?: { dueId: string, dueName: string, date: string, amount: number, collectedBy?: string, collectedByRole?: string }[];
+  termsAgreed?: boolean;
+  termsAgreedDate?: string;
 };
 
 type UserProfile = {
@@ -82,6 +93,15 @@ type Expense = {
   description: string;
   amount: number;
   category?: string;
+  timestamp: any;
+  adminId: string;
+  adminName: string;
+};
+
+type InitialBalance = {
+  id: string;
+  amount: number;
+  description: string;
   timestamp: any;
   adminId: string;
   adminName: string;
@@ -205,6 +225,227 @@ class ErrorBoundary extends Component<any, any> {
   }
 }
 
+const GlobalOverlays = ({ showTermsModal, setShowTermsModal, showLoginSuccess, toast, profile, teacherRecord, onAgreeTerms, records = [] }: any) => {
+  const [termsChecked, setTermsChecked] = useState(false);
+  const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (showTermsModal && scrollRef.current) {
+      const { scrollHeight, clientHeight } = scrollRef.current;
+      if (scrollHeight <= clientHeight + 10) {
+        setHasScrolledToBottom(true);
+      }
+    }
+  }, [showTermsModal]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop <= clientHeight + 20) {
+      setHasScrolledToBottom(true);
+    }
+  };
+
+  const handleAgree = () => {
+    if (profile?.role === 'teacher' && onAgreeTerms) {
+      if (!termsChecked) {
+        toast("Please check the box to agree to the terms.");
+        return;
+      }
+      onAgreeTerms();
+    } else {
+      setShowTermsModal(false);
+    }
+  };
+
+  return (
+    <>
+      {/* Terms and Privacy Modal */}
+      <AnimatePresence>
+        {showTermsModal && (
+          <div className="fixed inset-0 flex items-center justify-center z-[110] p-4 sm:p-6 bg-blue-900/40 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-2xl max-h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden border border-blue-100"
+            >
+              <div className="p-6 sm:p-8 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                <div className="flex items-center gap-4">
+                  {profile?.role !== 'teacher' && (
+                    <button 
+                      onClick={() => setShowTermsModal(false)}
+                      className="p-2 hover:bg-white rounded-xl transition-all text-gray-400 hover:text-[#0038A8] shadow-sm hover:shadow-md lg:hidden"
+                    >
+                      <ChevronLeft size={20} />
+                    </button>
+                  )}
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-[#0038A8] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-200">
+                    <ShieldCheck size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-lg sm:text-2xl font-black text-gray-900 tracking-tight">Terms & Privacy</h2>
+                    <p className="text-[9px] sm:text-[10px] text-[#0038A8] font-black uppercase tracking-widest mt-1">Faculty Club Guidelines</p>
+                  </div>
+                </div>
+                {profile?.role !== 'teacher' && (
+                  <>
+                    <button 
+                      onClick={() => setShowTermsModal(false)}
+                      className="hidden lg:flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-500 rounded-xl hover:bg-gray-200 hover:text-gray-700 transition-all font-black text-[10px] uppercase tracking-widest"
+                    >
+                      <ChevronLeft size={14} /> Back
+                    </button>
+                    <button 
+                      onClick={() => setShowTermsModal(false)}
+                      className="lg:hidden p-3 hover:bg-white rounded-2xl transition-all text-gray-400 hover:text-red-500 shadow-sm hover:shadow-md"
+                    >
+                      <X size={24} />
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div 
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="flex-1 overflow-y-auto p-6 sm:p-10 custom-scrollbar space-y-10"
+              >
+                <section>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 bg-blue-50 rounded-xl flex items-center justify-center text-[#0038A8]">
+                      <FileText size={16} />
+                    </div>
+                    <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Terms of Service</h3>
+                  </div>
+                  <div className="space-y-4 text-sm text-gray-600 font-medium leading-relaxed">
+                    <p>Welcome to the Las Piñas CAA National High School Faculty Club Management System. By using this application, you agree to the following terms:</p>
+                    <ul className="list-disc pl-5 space-y-2">
+                      <li>The system is exclusively for the use of authorized Faculty Club members and officers.</li>
+                      <li>Users are responsible for maintaining the confidentiality of their login credentials and QR codes.</li>
+                      <li>Any unauthorized access or misuse of financial data is strictly prohibited and may result in disciplinary action.</li>
+                      <li><strong>Email Communications:</strong> To help keep everyone informed, you may receive polite email reminders regarding any pending dues or important club updates.</li>
+                      <li>The Faculty Club reserves the right to update these terms at any time to reflect changes in club policies or legal requirements.</li>
+                    </ul>
+                  </div>
+                </section>
+
+                <section>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 bg-green-50 rounded-xl flex items-center justify-center text-green-600">
+                      <ShieldCheck size={16} />
+                    </div>
+                    <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Data Privacy Guidelines</h3>
+                  </div>
+                  <div className="space-y-4 text-sm text-gray-600 font-medium leading-relaxed">
+                    <p>We are committed to protecting your personal and financial information in accordance with Data Privacy standards:</p>
+                    <ul className="list-disc pl-5 space-y-2">
+                      <li><strong>Collection:</strong> We collect your name, email, contact number, and grade level for membership and financial tracking purposes.</li>
+                      <li><strong>Usage:</strong> Your data is used solely for recording dues, generating receipts, and managing club remittances.</li>
+                      <li><strong>Security:</strong> All data is stored securely using industry-standard encryption and access controls.</li>
+                      <li><strong>Access:</strong> Only authorized club officers (BODs and Admins) have access to collective financial data for audit and reporting purposes.</li>
+                      <li><strong>Retention:</strong> Data is retained for the duration of your membership or as required for historical financial auditing.</li>
+                    </ul>
+                  </div>
+                </section>
+
+                <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100">
+                  <p className="text-xs text-[#0038A8] font-bold leading-relaxed">
+                    If you have any questions or concerns regarding these guidelines, please contact the Faculty Club Officers or the System Administrator.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-6 sm:p-8 bg-gray-50 border-t border-gray-100 space-y-4">
+                {profile?.role === 'teacher' && (
+                  <label className={`flex items-start gap-3 group ${!hasScrolledToBottom ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                    <div className="relative flex items-center justify-center mt-0.5">
+                      <input 
+                        type="checkbox" 
+                        checked={termsChecked}
+                        onChange={(e) => setTermsChecked(e.target.checked)}
+                        disabled={!hasScrolledToBottom}
+                        className="peer appearance-none w-5 h-5 border-2 border-gray-300 rounded-lg checked:bg-[#0038A8] checked:border-[#0038A8] transition-all cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <Check size={14} className="absolute text-white opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity" strokeWidth={3} />
+                    </div>
+                    <span className="text-sm text-gray-600 font-medium group-hover:text-gray-900 transition-colors">
+                      I have read, understood, and agree to the Terms of Service and Data Privacy Guidelines.
+                    </span>
+                  </label>
+                )}
+                <button 
+                  onClick={handleAgree}
+                  disabled={(profile?.role === 'teacher' && (!termsChecked || !hasScrolledToBottom)) || (profile?.role === 'teacher' && !teacherRecord)}
+                  className="w-full py-4 bg-[#0038A8] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {profile?.role === 'teacher' && !teacherRecord 
+                    ? (records.length === 0 ? 'Loading...' : 'Teacher Record Not Found') 
+                    : profile?.role === 'teacher' && !hasScrolledToBottom 
+                      ? 'Please read the terms to continue' 
+                      : 'I Understand and Agree'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Login Success Pop-up */}
+      <AnimatePresence>
+        {showLoginSuccess && (
+          <div className="fixed inset-0 flex items-center justify-center z-[120] pointer-events-none bg-blue-900/10 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.5, y: 100 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.5, y: 100 }}
+              transition={{ type: 'spring', damping: 15, stiffness: 100 }}
+              className="bg-white/90 backdrop-blur-xl p-10 rounded-[3rem] shadow-[0_30px_100px_rgba(0,56,168,0.2)] border border-blue-100 text-center max-w-sm w-full mx-4"
+            >
+              <div className="bg-green-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 text-green-600 shadow-inner">
+                <motion.div
+                  initial={{ scale: 0, rotate: -45 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  transition={{ type: 'spring', damping: 12, stiffness: 200, delay: 0.2 }}
+                >
+                  <CheckCircle size={48} />
+                </motion.div>
+              </div>
+              <h2 className="text-3xl font-black text-gray-900 mb-2 tracking-tight">Welcome Back!</h2>
+              <p className="text-[#0038A8] font-black uppercase tracking-[0.2em] text-[10px]">Successfully Logged In</p>
+              <div className="mt-8 flex justify-center gap-2">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0s' }}></div>
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="fixed bottom-4 right-4 left-4 md:bottom-8 md:right-8 md:left-auto md:w-auto bg-white text-gray-900 px-6 py-4 md:px-8 md:py-5 rounded-2xl md:rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex items-center gap-4 z-[130] border border-gray-100"
+          >
+            <div className="bg-green-100 p-3 rounded-2xl text-green-600">
+              <CheckCircle size={24} />
+            </div>
+            <div>
+              <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-0.5">Notification</p>
+              <p className="font-black text-sm text-gray-900">{toast}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -212,6 +453,34 @@ export default function App() {
     </ErrorBoundary>
   );
 }
+
+type Signatory = {
+  id: string;
+  name: string;
+  title: string;
+  label: string;
+};
+
+const BACKGROUND_PARTICLES = [...Array(18)].map((_, i) => ({
+  id: i,
+  size: Math.random() * 50 + 15,
+  left: Math.random() * 100,
+  duration: Math.random() * 10 + 15,
+  delay: Math.random() * -30,
+  xOffset: (Math.random() - 0.5) * 60,
+  pops: Math.random() > 0.3 // 70% chance to pop
+}));
+
+const CARD_PARTICLES = [...Array(6)].map((_, i) => ({
+  id: `card-${i}`,
+  size: Math.random() * 30 + 10,
+  left: Math.random() * 80 + 10,
+  top: Math.random() * 80 + 10,
+  duration: Math.random() * 5 + 5,
+  delay: Math.random() * -10,
+  xOffset: (Math.random() - 0.5) * 20,
+  yOffset: (Math.random() - 0.5) * 20
+}));
 
 function AppContent() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -223,9 +492,11 @@ function AppContent() {
   const [remittances, setRemittances] = useState<Remittance[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [initialBalances, setInitialBalances] = useState<InitialBalance[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [signatories, setSignatories] = useState<Signatory[]>([]);
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | 'All'>('All');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'collection' | 'admin' | 'remittance' | 'expenses' | 'audit' | 'profile'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'collection' | 'admin' | 'remittance' | 'expenses' | 'audit' | 'profile' | 'settings' | 'system'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
@@ -235,21 +506,173 @@ function AppContent() {
   const [editProfileEmail, setEditProfileEmail] = useState('');
   const [isBatchSending, setIsBatchSending] = useState(false);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [showWipeSuccessModal, setShowWipeSuccessModal] = useState(false);
+  const [isSendingReminder, setIsSendingReminder] = useState<string | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+  const [archiveYear, setArchiveYear] = useState(new Date().getFullYear().toString());
   const [isBatchDeleteModalOpen, setIsBatchDeleteModalOpen] = useState(false);
-  const [qrCodeData, setQrCodeData] = useState<{ email: string, pass: string, grade: string, realEmail?: string } | null>(null);
+  const [newBalanceAmount, setNewBalanceAmount] = useState('');
+  const [newBalanceDescription, setNewBalanceDescription] = useState('');
+  const [qrCodeData, setQrCodeData] = useState<{ email: string, pass?: string, grade: string, realEmail?: string } | null>(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [isScanSuccess, setIsScanSuccess] = useState(false);
+  const [scannerCameraMode, setScannerCameraMode] = useState<'environment' | 'user'>('environment');
   const [isQRLogin, setIsQRLogin] = useState(false);
   const [unauthorizedEmail, setUnauthorizedEmail] = useState<string | null>(null);
   const [showLoginSuccess, setShowLoginSuccess] = useState(false);
+  const justLoggedIn = useRef(false);
+
+  useEffect(() => {
+    if (justLoggedIn.current && user && profile) {
+      justLoggedIn.current = false;
+      setShowLoginSuccess(true);
+      setTimeout(() => setShowLoginSuccess(false), 4000);
+    }
+  }, [user, profile]);
+
+  const [isVoluntaryModalOpen, setIsVoluntaryModalOpen] = useState(false);
+  const [voluntaryPaymentData, setVoluntaryPaymentData] = useState<{ teacherId: string, dueId: string, amount: string } | null>(null);
   const [deleteType, setDeleteType] = useState<'selected' | 'all'>('selected');
   const [selectedTeacherIds, setSelectedTeacherIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [paymentFilter, setPaymentFilter] = useState<'All' | 'Paid' | 'Partial' | 'Pending'>('All');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(20);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const [torchOn, setTorchOn] = useState(false);
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [showDues, setShowDues] = useState(true);
   const [showPayments, setShowPayments] = useState(true);
+
+  // QR Verification States
+  const [isVerifyingQR, setIsVerifyingQR] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  const [verificationExpiry, setVerificationExpiry] = useState<number | null>(null);
+  const [qrLoginData, setQrLoginData] = useState<{ email: string, pass?: string, realEmail: string } | null>(null);
+  const [verificationInput, setVerificationInput] = useState('');
+  const [resendTimer, setResendTimer] = useState(0);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+
+  // Optimized Calculations
+  const totalCollections = useMemo(() => {
+    return records.reduce((sum, r) => {
+      const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
+      return sum + paidDues.reduce((s, d) => {
+        if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
+        return s + d.amount;
+      }, 0);
+    }, 0);
+  }, [records, standardDues]);
+
+  const totalExpenses = useMemo(() => {
+    return expenses.reduce((sum, e) => sum + e.amount, 0);
+  }, [expenses]);
+
+  const totalInitialBalance = useMemo(() => {
+    return initialBalances.reduce((sum, b) => sum + b.amount, 0);
+  }, [initialBalances]);
+
+  const netBalance = useMemo(() => {
+    return totalCollections + totalInitialBalance - totalExpenses;
+  }, [totalCollections, totalInitialBalance, totalExpenses]);
+
+  const requiredDues = useMemo(() => {
+    return standardDues.filter(d => !d.isVoluntary);
+  }, [standardDues]);
+
+  const totalCollectibles = useMemo(() => {
+    return requiredDues.reduce((sum, d) => sum + d.amount, 0);
+  }, [requiredDues]);
+
+  const fullyPaidCount = useMemo(() => {
+    return records.filter(r => {
+      return requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
+    }).length;
+  }, [records, requiredDues]);
+
+  const totalDuesAmount = useMemo(() => {
+    return standardDues.reduce((sum, d) => sum + d.amount, 0);
+  }, [standardDues]);
+
+  const expenseChartData = useMemo(() => {
+    const categories: Record<string, number> = {};
+    expenses.forEach(e => {
+      const cat = e.category || 'General';
+      categories[cat] = (categories[cat] || 0) + e.amount;
+    });
+    return Object.entries(categories).map(([name, value]) => ({ name, value }));
+  }, [expenses]);
+
+  const collectionTrendData = useMemo(() => {
+    const monthsData: Record<string, { monthly: number, cumulative: number, order: number }> = {};
+    const monthOrder = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    // 1. Add verified remittances (BOD collections)
+    remittances.filter(r => r.status === 'verified').forEach(r => {
+      const date = r.timestamp?.toDate();
+      if (date) {
+        const monthName = date.toLocaleString('default', { month: 'short' });
+        if (!monthsData[monthName]) {
+          monthsData[monthName] = { monthly: 0, cumulative: 0, order: monthOrder.indexOf(monthName) };
+        }
+        monthsData[monthName].monthly += r.amount;
+      }
+    });
+
+    // 2. Add Admin collections (direct payments)
+    records.forEach(record => {
+      record.paymentHistory?.forEach(payment => {
+        if (payment.collectedByRole === 'admin') {
+          const date = new Date(payment.date);
+          const monthName = date.toLocaleString('default', { month: 'short' });
+          if (!monthsData[monthName]) {
+            monthsData[monthName] = { monthly: 0, cumulative: 0, order: monthOrder.indexOf(monthName) };
+          }
+          monthsData[monthName].monthly += payment.amount;
+        }
+      });
+    });
+    
+    const sortedData = Object.entries(monthsData)
+      .sort((a, b) => a[1].order - b[1].order)
+      .map(([name, data]) => ({ name, monthly: data.monthly, cumulative: 0 }));
+
+    // Calculate cumulative
+    let runningTotal = 0;
+    return sortedData.map(item => {
+      runningTotal += item.monthly;
+      return { ...item, cumulative: runningTotal };
+    });
+  }, [remittances, records]);
+
+  const filteredRecords = useMemo(() => {
+    return records
+      .filter(record => {
+        const matchesSearch = record.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                             record.email.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesGrade = selectedGrade === 'All' || record.gradeLevel === selectedGrade;
+        
+        const totalPaid = standardDues
+          .filter(d => record.paidDueIds.includes(d.id))
+          .reduce((sum, d) => {
+            if (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) {
+              return sum + record.voluntaryPayments[d.id];
+            }
+            return sum + d.amount;
+          }, 0);
+        const requiredDues = standardDues.filter(d => !d.isVoluntary);
+        const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
+        
+        const matchesPayment = paymentFilter === 'All' || 
+                              (paymentFilter === 'Paid' && isFullyPaid) || 
+                              (paymentFilter === 'Partial' && !isFullyPaid && totalPaid > 0) ||
+                              (paymentFilter === 'Pending' && totalPaid === 0);
+        
+        return matchesSearch && matchesGrade && matchesPayment;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [records, searchQuery, selectedGrade, paymentFilter, standardDues]);
 
   const NavItem = ({ id, icon: Icon, label, role }: { id: typeof activeTab, icon: any, label: string, role?: string }) => {
     if (role && profile?.role !== role && profile?.role !== 'admin') return null;
@@ -273,7 +696,7 @@ function AppContent() {
         }`}>
           <Icon size={18} className={isActive ? 'text-white' : 'text-gray-500 group-hover:text-[#0038A8]'} />
         </div>
-        <span className={`text-xs font-black uppercase tracking-widest ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`}>
+        <span className={`text-xs lg:text-sm font-black uppercase tracking-widest ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`}>
           {label}
         </span>
         {isActive && (
@@ -326,7 +749,7 @@ function AppContent() {
     }
   };
 
-  const downloadQRCode = (canvasId: string, fileName: string, email: string) => {
+  const downloadQRCode = async (canvasId: string, fileName: string, email: string, grade?: string) => {
     const qrCanvas = document.getElementById(canvasId) as HTMLCanvasElement;
     if (!qrCanvas) {
       showToast("Error: QR Code not found.");
@@ -340,8 +763,8 @@ function AppContent() {
       if (!ctx) throw new Error("Could not create canvas context");
 
       // Set dimensions
-      finalCanvas.width = 500;
-      finalCanvas.height = 700;
+      finalCanvas.width = 1000;
+      finalCanvas.height = 1450;
 
       // 1. Background
       ctx.fillStyle = '#ffffff';
@@ -349,43 +772,69 @@ function AppContent() {
 
       // 2. Header
       ctx.fillStyle = '#0038A8';
-      ctx.font = 'bold 32px Arial';
+      ctx.font = 'bold 64px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('FACULTY CLUB', 250, 60);
+      ctx.fillText('FACULTY CLUB', 500, 120);
       
       ctx.fillStyle = '#666666';
-      ctx.font = 'bold 16px Arial';
-      ctx.fillText('SECURE LOGIN QR CODE', 250, 95);
+      ctx.font = 'bold 32px Arial';
+      ctx.fillText('SECURE LOGIN QR CODE', 500, 190);
+
+      if (grade) {
+        ctx.fillStyle = '#0038A8';
+        ctx.font = 'bold 36px Arial';
+        ctx.fillText(grade, 500, 240);
+      }
 
       // 3. Draw QR Code (centered)
-      const qrSize = 350;
+      const qrSize = 700;
       const qrX = (finalCanvas.width - qrSize) / 2;
-      const qrY = 130;
+      const qrY = 280; // Moved down slightly to accommodate grade
+      
+      // Draw Border
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#DBEAFE'; // blue-100
+      ctx.lineWidth = 12;
+      ctx.strokeRect(qrX - 12, qrY - 12, qrSize + 24, qrSize + 24);
+      ctx.fillRect(qrX - 12, qrY - 12, qrSize + 24, qrSize + 24);
+
       ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
+
+      // Draw Sun Logo
+      const logoSize = 140;
+      const logoX = (finalCanvas.width - logoSize) / 2;
+      const logoY = qrY + (qrSize - logoSize) / 2;
+      
+      const img = new Image();
+      img.src = SUN_LOGO_SVG;
+      await new Promise((resolve) => {
+        img.onload = resolve;
+      });
+      ctx.drawImage(img, logoX, logoY, logoSize, logoSize);
 
       // 4. Email Section
       ctx.fillStyle = '#999999';
-      ctx.font = 'bold 14px Arial';
-      ctx.fillText('ACCOUNT EMAIL', 250, 520);
+      ctx.font = 'bold 28px Arial';
+      ctx.fillText('ACCOUNT EMAIL', 500, 1060);
       
       ctx.fillStyle = '#000000';
-      ctx.font = 'bold 22px Arial';
-      ctx.fillText(email, 250, 555);
+      ctx.font = 'bold 44px Arial';
+      ctx.fillText(email, 500, 1130);
 
       // 5. Security Note Box
       ctx.fillStyle = '#F8FAFC';
-      ctx.fillRect(50, 590, 400, 80);
+      ctx.fillRect(100, 1200, 800, 160);
       ctx.strokeStyle = '#E2E8F0';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(50, 590, 400, 80);
+      ctx.lineWidth = 4;
+      ctx.strokeRect(100, 1200, 800, 160);
 
       ctx.fillStyle = '#EF4444';
-      ctx.font = 'bold 14px Arial';
-      ctx.fillText('IMPORTANT SECURITY NOTICE', 250, 620);
+      ctx.font = 'bold 28px Arial';
+      ctx.fillText('IMPORTANT SECURITY NOTICE', 500, 1260);
       
       ctx.fillStyle = '#64748B';
-      ctx.font = 'bold 12px Arial';
-      ctx.fillText('Keep this QR code private. It grants direct access to your account.', 250, 645);
+      ctx.font = 'bold 24px Arial';
+      ctx.fillText('Keep this QR code private. It grants direct access to your account.', 500, 1310);
 
       // 6. Download
       const dataUrl = finalCanvas.toDataURL('image/png');
@@ -402,11 +851,35 @@ function AppContent() {
     }
   };
 
+  const handleAddInitialBalance = async () => {
+    if (!newBalanceAmount || isNaN(parseFloat(newBalanceAmount))) {
+      showToast("Please enter a valid amount.");
+      return;
+    }
+    try {
+      await addDoc(collection(db, 'initial_balances'), {
+        amount: parseFloat(newBalanceAmount),
+        description: newBalanceDescription || 'Initial Balance',
+        timestamp: serverTimestamp(),
+        adminId: user?.uid,
+        adminName: profile?.name
+      });
+      setNewBalanceAmount('');
+      setNewBalanceDescription('');
+      showToast("Initial balance added successfully.");
+      logActivity("Added Initial Balance", `Admin ${profile?.name} added initial balance of ₱${newBalanceAmount}`);
+    } catch (error: any) {
+      console.error("Add Balance Error:", error);
+      showToast(`Failed to add balance: ${error.message}`);
+    }
+  };
+
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<TeacherRecord | null>(null);
   const [editLastName, setEditLastName] = useState('');
   const [editFirstName, setEditFirstName] = useState('');
   const [editMiddleInitial, setEditMiddleInitial] = useState('');
+  const [editGender, setEditGender] = useState<'Male' | 'Female'>('Female');
   const [editEmail, setEditEmail] = useState('');
   const [editContactNumber, setEditContactNumber] = useState('');
   const [editGradeLevel, setEditGradeLevel] = useState<GradeLevel>('Grade 7');
@@ -424,7 +897,7 @@ function AppContent() {
       console.log("Auth State Changed:", firebaseUser?.email);
       if (firebaseUser) {
         const email = firebaseUser.email?.toLowerCase() || '';
-        const isAdminEmail = email === 'lpcaanhsfacultyclubofficers@gmail.com';
+        const isAdminEmail = email === 'lpcaanhsfacultyclubofficers@gmail.com' || email === 'ngehthong@gmail.com';
         const isBodEmail = Object.keys(ALLOWED_BODS).includes(email);
         const isQRLoginEmail = email.startsWith('qr-') && email.endsWith('@facultyclub.local');
         
@@ -453,28 +926,46 @@ function AppContent() {
           setUser(firebaseUser);
           setProfile(data);
         } else {
-          // Check if this email belongs to a teacher
-          const teacherQuery = query(collection(db, 'teachers'), where('email', '==', email));
-          const teacherSnap = await getDocs(teacherQuery);
-          
-          let role: 'admin' | 'bod' | 'teacher' | 'unauthorized' = 'unauthorized';
-          let gradeLevel: GradeLevel | 'All' = 'Grade 7';
-          
-          if (isAdminEmail) {
-            role = 'admin';
-            gradeLevel = 'All';
-          } else if (isBodEmail) {
-            role = 'bod';
-            gradeLevel = ALLOWED_BODS[email];
-          } else if (isQRLoginEmail) {
-            role = 'bod';
-            gradeLevel = 'Grade 7'; // Default, will be updated by grade selection modal
-          } else if (!teacherSnap.empty) {
-            role = 'teacher';
-            gradeLevel = teacherSnap.docs[0].data().gradeLevel;
-          }
+          try {
+            // Check if this email belongs to a teacher (client-side filter for case-insensitivity)
+            const teachersSnap = await getDocs(collection(db, 'teachers'));
+            const teacherDoc = teachersSnap.docs.find(doc => doc.data().email.toLowerCase().trim() === email.toLowerCase().trim());
+            
+            let role: 'admin' | 'bod' | 'teacher' | 'unauthorized' = 'unauthorized';
+            let gradeLevel: GradeLevel | 'All' = 'Grade 7';
+            
+            if (isAdminEmail) {
+              role = 'admin';
+              gradeLevel = 'All';
+            } else if (isBodEmail) {
+              role = 'bod';
+              gradeLevel = ALLOWED_BODS[email];
+            } else if (teacherDoc) {
+              role = 'teacher';
+              gradeLevel = teacherDoc.data().gradeLevel;
+            }
 
-          if (role === 'unauthorized') {
+            if (role === 'unauthorized') {
+              signOut(auth);
+              setUnauthorizedEmail(email);
+              setUser(null);
+              setProfile(null);
+              setLoading(false);
+              return;
+            }
+
+            const newProfile: UserProfile = {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              role,
+              gradeLevel,
+              name: firebaseUser.displayName || (isAdminEmail ? 'Executive Officer' : role === 'teacher' ? 'Teacher' : 'BOD Member')
+            };
+            await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
+            setUser(firebaseUser);
+            setProfile(newProfile);
+          } catch (error) {
+            console.error("Error during user initialization:", error);
             signOut(auth);
             setUnauthorizedEmail(email);
             setUser(null);
@@ -482,17 +973,6 @@ function AppContent() {
             setLoading(false);
             return;
           }
-
-          const newProfile: UserProfile = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            role,
-            gradeLevel,
-            name: firebaseUser.displayName || (isAdminEmail ? 'Executive Officer' : role === 'teacher' ? 'Teacher' : 'BOD Member')
-          };
-          await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-          setUser(firebaseUser);
-          setProfile(newProfile);
         }
       } else {
         setUser(null);
@@ -521,8 +1001,9 @@ function AppContent() {
     // BODs only see their grade level
     if (profile.role === 'bod') {
       q = query(collection(db, 'teachers'), where('gradeLevel', '==', profile.gradeLevel));
-    } else if (profile.role === 'teacher' && profile.email) {
-      q = query(collection(db, 'teachers'), where('email', '==', profile.email));
+    } else if (profile.role === 'teacher') {
+      // Fetch all teachers for teachers to allow client-side case-insensitive filtering
+      q = query(collection(db, 'teachers'));
     } else if (selectedGrade !== 'All') {
       q = query(collection(db, 'teachers'), where('gradeLevel', '==', selectedGrade));
     }
@@ -559,15 +1040,25 @@ function AppContent() {
     return () => unsubscribe();
   }, [user, profile]);
 
-  // Admin: Fetch Expenses
+  // Admin/BOD: Fetch Expenses
   useEffect(() => {
-    if (!user || !profile || profile.role !== 'admin') return;
+    if (!user || !profile || (profile.role !== 'admin' && profile.role !== 'bod')) return;
     const unsubscribe = onSnapshot(collection(db, 'expenses'), (snapshot) => {
       const expenseData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
       setExpenses(expenseData);
     });
     return () => unsubscribe();
   }, [user, profile]);
+
+  // Firestore Sync: Initial Balances
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(collection(db, 'initial_balances'), (snapshot) => {
+      const balanceData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InitialBalance));
+      setInitialBalances(balanceData);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   // Admin: Fetch Audit Logs
   useEffect(() => {
@@ -580,6 +1071,40 @@ function AppContent() {
     });
     return () => unsubscribe();
   }, [user, profile]);
+
+  // Fetch Signatories
+  useEffect(() => {
+    if (!user || !profile) return;
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'signatories'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setSignatories(data.list || []);
+      } else {
+        // Initialize with defaults if not exists
+        const defaults: Signatory[] = [
+          { id: '1', label: 'Prepared by:', name: '', title: 'Faculty Club Treasurer' },
+          { id: '2', label: 'Noted by:', name: '', title: 'Faculty Club President' },
+          { id: '3', label: 'Approved by:', name: '', title: 'School Principal' }
+        ];
+        setSignatories(defaults);
+        if (profile.role === 'admin') {
+          setDoc(doc(db, 'settings', 'signatories'), { list: defaults });
+        }
+      }
+    });
+    return () => unsubscribe();
+  }, [user, profile]);
+
+  const updateSignatories = async (newList: Signatory[]) => {
+    try {
+      await setDoc(doc(db, 'settings', 'signatories'), { list: newList });
+      showToast("Signatories updated successfully.");
+      logActivity("Updated Signatories", "Admin updated report signatories.");
+    } catch (error) {
+      console.error("Update Signatories Error:", error);
+      showToast("Failed to update signatories.");
+    }
+  };
 
   const updateUserRole = async (uid: string, role: 'admin' | 'bod' | 'teacher', gradeLevel: GradeLevel | 'All') => {
     try {
@@ -602,46 +1127,117 @@ function AppContent() {
   useEffect(() => {
     let html5QrCode: Html5Qrcode | null = null;
 
-    const startScanner = async () => {
+    const processScannedData = async (decodedText: string, stopScanner?: () => Promise<void>) => {
+    try {
+      console.log("QR Code Scanned (raw):", decodedText);
+      let data;
+      try {
+        data = JSON.parse(decodedText);
+        console.log("QR Code Parsed Data:", data);
+      } catch (e) {
+        console.error("QR Code JSON Parse Error:", e, "Raw Text:", decodedText);
+        throw new Error("Invalid QR code format (JSON parse failed)");
+      }
+      
+      if (!data.email) {
+        console.error("QR Code Missing Email Field:", data);
+        throw new Error("Invalid QR code format (missing email)");
+      }
+
+      setIsScanSuccess(true);
+      
+      // Small delay to show success feedback
+      await new Promise(resolve => setTimeout(resolve, 600));
+
+      if (stopScanner) {
+        await stopScanner();
+      }
+      setShowScanner(false);
+      setIsScanSuccess(false);
+      
+      // Robust email resolution for old/new QR codes
+      let targetEmail = data.realEmail || data.email;
+      
+      // VALIDATION: Check if the QR code is still valid
+      try {
+        const usersRef = collection(db, 'users');
+        const q = query(usersRef, where('qrEmail', '==', data.email));
+        const snapshot = await getDocs(q);
+        
+        if (!snapshot.empty) {
+          const userData = snapshot.docs[0].data();
+          if (userData.email !== targetEmail) {
+            showToast("The email address for this account has been changed. This QR code is no longer valid. Please generate a new one.");
+            setLoading(false);
+            return;
+          }
+        } else {
+          // Fallback for older QR codes that might not have qrEmail stored in the DB
+          const q2 = query(usersRef, where('email', '==', targetEmail));
+          const snapshot2 = await getDocs(q2);
+          if (!snapshot2.empty) {
+            const userData = snapshot2.docs[0].data();
+            if (userData.qrEmail && userData.qrEmail !== data.email) {
+              showToast("This QR code is no longer valid. Please generate a new one.");
+              setLoading(false);
+              return;
+            }
+          } else {
+             showToast("Account not found. This QR code may be invalid or the account was deleted.");
+             setLoading(false);
+             return;
+          }
+        }
+      } catch (err) {
+         console.error("Error validating QR code:", err);
+      }
+      
+      // Start verification process for everyone
+      setQrLoginData({ 
+        email: data.email, 
+        pass: data.pass,
+        realEmail: targetEmail 
+      });
+      
+      setIsVerifyingQR(true);
+      
+      sendVerificationCode(targetEmail);
+      
+    } catch (e: any) {
+      console.error("QR Login Error:", e);
+      // Silently ignore invalid QR codes during scanning to prevent annoying toasts
+      setLoading(false);
+    }
+  };
+
+  const startScanner = async () => {
       if (showScanner) {
         // Add a small delay to ensure the DOM element is ready
         await new Promise(resolve => setTimeout(resolve, 300));
         try {
           html5QrCode = new Html5Qrcode("qr-reader");
+          scannerRef.current = html5QrCode;
           const config = { 
-            fps: 10, 
-            qrbox: { width: 250, height: 250 },
-            aspectRatio: 1.0
+            fps: 20, // Increased FPS for smoother scanning
+            qrbox: (viewWidth: number, viewHeight: number) => {
+              const minDim = Math.min(viewWidth, viewHeight);
+              const qrboxSize = Math.floor(minDim * 0.7);
+              return { width: qrboxSize, height: qrboxSize };
+            },
+            aspectRatio: 1.0,
+            showTorchButtonIfSupported: true,
+            showZoomSliderIfSupported: true,
           };
 
           await html5QrCode.start(
-            { facingMode: "environment" }, 
+            { facingMode: scannerCameraMode }, 
             config,
             async (decodedText) => {
-              try {
-                console.log("QR Code Scanned:", decodedText);
-                const data = JSON.parse(decodedText);
-                if (!data.email || !data.pass) {
-                  throw new Error("Invalid QR code format");
-                }
-
+              await processScannedData(decodedText, async () => {
                 if (html5QrCode) {
                   await html5QrCode.stop();
                 }
-                setShowScanner(false);
-                setLoading(true);
-                
-                await signInWithEmailAndPassword(auth, data.email, data.pass);
-                
-                setIsQRLogin(true);
-                
-                setShowLoginSuccess(true);
-                setTimeout(() => setShowLoginSuccess(false), 4000);
-              } catch (e: any) {
-                console.error("QR Login Error:", e);
-                showToast(`QR Login Failed: ${e.message || "Invalid format"}`);
-                setLoading(false);
-              }
+              });
             },
             (errorMessage) => {
               // Ignore scan errors as they happen constantly when no QR code is in view
@@ -662,14 +1258,41 @@ function AppContent() {
         html5QrCode.stop().catch(err => console.error("Scanner Stop Error:", err));
       }
     };
+  }, [showScanner, scannerCameraMode]);
+
+  useEffect(() => {
+    if (scannerRef.current) {
+      scannerRef.current.applyVideoConstraints({
+        advanced: [{ torch: torchOn } as any]
+      }).catch(err => console.error("Torch error:", err));
+    }
+  }, [torchOn]);
+
+  useEffect(() => {
+    if (!showScanner) {
+      setTorchOn(false);
+      scannerRef.current = null;
+    }
   }, [showScanner]);
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      const email = result.user.email?.toLowerCase() || '';
+      
+      const isAdminEmail = email === 'lpcaanhsfacultyclubofficers@gmail.com' || email === 'ngehthong@gmail.com';
+      const isBodEmail = Object.keys(ALLOWED_BODS).includes(email);
+      
+      const teacherQuery = query(collection(db, 'teachers'), where('email', '==', email));
+      const teacherSnap = await getDocs(teacherQuery);
+      
+      if (!isAdminEmail && !isBodEmail && teacherSnap.empty) {
+        // Unauthorized user, onAuthStateChanged will handle sign out and show the unauthorized modal
+        return;
+      }
+
       showToast("Successfully logged in!");
-      setShowLoginSuccess(true);
-      setTimeout(() => setShowLoginSuccess(false), 4000);
+      justLoggedIn.current = true;
     } catch (error: any) {
       console.error("Login Error:", error);
       if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
@@ -681,6 +1304,102 @@ function AppContent() {
   };
 
   const handleLogout = () => signOut(auth);
+
+  const sendVerificationCode = async (email: string) => {
+    if (!email || email === 'undefined') {
+      showToast("Error: Invalid email address for verification.");
+      return;
+    }
+
+    if (email.includes('@facultyclub.local')) {
+      showToast("Warning: This QR code is outdated. Please ask Admin to regenerate it for reliable email verification.");
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = Date.now() + 60000; // 1 minute
+    
+    setVerificationCode(code);
+    setVerificationExpiry(expiry);
+    setResendTimer(60);
+    setVerificationInput('');
+    
+    // Show toast immediately for an "instant" feel
+    showToast(`Sending verification code to ${email}...`);
+    
+    try {
+      // We don't await the fetch if we want it to be truly instant, 
+      // but we still want to handle errors.
+      fetch('/api/send-verification-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code })
+      }).then(async (response) => {
+        const result = await response.json();
+        if (result.success) {
+          if (result.simulated) {
+            console.log("Verification code simulated:", code);
+            showToast(`Verification code (Simulated): ${code}`);
+          } else {
+            console.log("Verification code API success");
+            showToast(`Verification code sent to ${email}`);
+          }
+        } else {
+          console.error(`Failed to send code: ${result.error || "Unknown error"}`);
+          // Fallback to simulated code
+          showToast(`Verification code (Simulated): ${code}`);
+        }
+      }).catch((err) => {
+        console.error("Verification Code Fetch Error:", err);
+        // Fallback to simulated code if API fails
+        showToast(`Verification code (Simulated): ${code}`);
+      });
+    } catch (error: any) {
+      console.error("Verification Code Error:", error);
+      // Fallback to simulated code
+      showToast(`Verification code (Simulated): ${code}`);
+    }
+  };
+
+  const handleVerifyQR = async () => {
+    if (!qrLoginData || !verificationCode || !verificationExpiry) return;
+    
+    if (Date.now() > verificationExpiry) {
+      showToast("Verification code has expired. Please request a new one.");
+      return;
+    }
+    
+    if (verificationInput !== verificationCode) {
+      showToast("Invalid or old verification code. Please enter the latest code sent to your email.");
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, qrLoginData.email, qrLoginData.pass);
+      setIsQRLogin(true);
+      setIsVerifyingQR(false);
+      setQrLoginData(null);
+      setVerificationCode('');
+      setVerificationExpiry(null);
+      
+      justLoggedIn.current = true;
+    } catch (error: any) {
+      console.error("QR Verification Login Error:", error);
+      showToast(`Login Failed: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: any;
+    if (resendTimer > 0) {
+      interval = setInterval(() => {
+        setResendTimer((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [resendTimer]);
 
   const selectGradeLevel = async (grade: GradeLevel) => {
     if (!profile || !user) return;
@@ -698,6 +1417,7 @@ function AppContent() {
   const [lastName, setLastName] = useState('');
   const [firstName, setFirstName] = useState('');
   const [middleInitial, setMiddleInitial] = useState('');
+  const [gender, setGender] = useState<'Male' | 'Female'>('Female');
   const [email, setEmail] = useState('');
   const [contactNumber, setContactNumber] = useState('');
   const [gradeLevel, setGradeLevel] = useState<GradeLevel>('Grade 7');
@@ -716,6 +1436,24 @@ function AppContent() {
   const [newExpenseDesc, setNewExpenseDesc] = useState('');
   const [newExpenseAmount, setNewExpenseAmount] = useState<number | ''>('');
   const [newExpenseCategory, setNewExpenseCategory] = useState('General');
+
+  const handleAgreeTerms = async () => {
+    if (!profile || profile.role !== 'teacher') return;
+    const teacherRecord = records.find(r => r.email.toLowerCase().trim() === profile.email.toLowerCase().trim());
+    if (!teacherRecord) return;
+    
+    try {
+      await updateDoc(doc(db, 'teachers', teacherRecord.id), {
+        termsAgreed: true,
+        termsAgreedDate: new Date().toISOString()
+      });
+      setShowTermsModal(false);
+      showToast("Terms agreed successfully.");
+    } catch (error) {
+      console.error("Error agreeing to terms:", error);
+      showToast("Failed to save agreement. Please try again.");
+    }
+  };
 
   const showToast = (message: string) => {
     setToast(message);
@@ -799,6 +1537,7 @@ function AppContent() {
     setEditLastName(teacher.lastName || '');
     setEditFirstName(teacher.firstName || '');
     setEditMiddleInitial(teacher.middleInitial || '');
+    setEditGender(teacher.gender || 'Female');
     setEditEmail(teacher.email || '');
     setEditContactNumber(teacher.contactNumber || '');
     setEditGradeLevel(teacher.gradeLevel);
@@ -817,6 +1556,7 @@ function AppContent() {
         lastName: editLastName,
         firstName: editFirstName,
         middleInitial: editMiddleInitial,
+        gender: editGender,
         email: editEmail,
         contactNumber: editContactNumber,
         gradeLevel: editGradeLevel
@@ -842,6 +1582,7 @@ function AppContent() {
         lastName,
         firstName,
         middleInitial,
+        gender,
         email: email || `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`,
         contactNumber: contactNumber || 'N/A',
         gradeLevel: gradeLevel,
@@ -852,6 +1593,7 @@ function AppContent() {
       setLastName('');
       setFirstName('');
       setMiddleInitial('');
+      setGender('Female');
       setEmail('');
       setContactNumber('');
       showToast(`Added ${fullName} to the list.`);
@@ -886,7 +1628,9 @@ function AppContent() {
         dueId,
         dueName: due?.name || 'Unknown Due',
         date: new Date().toISOString(),
-        amount: amount !== undefined ? amount : (due?.amount || 0)
+        amount: amount !== undefined ? amount : (due?.amount || 0),
+        collectedBy: profile?.name || 'System',
+        collectedByRole: profile?.role || 'admin'
       });
     }
 
@@ -901,12 +1645,38 @@ function AppContent() {
     }
   };
 
+  const handleTogglePayment = (teacherId: string, dueId: string) => {
+    const record = records.find(r => r.id === teacherId);
+    const due = standardDues.find(d => d.id === dueId);
+    if (!record || !due) return;
+
+    const isPaid = record.paidDueIds.includes(dueId);
+    if (!isPaid && due.isVoluntary) {
+      setVoluntaryPaymentData({ teacherId, dueId, amount: '' });
+      setIsVoluntaryModalOpen(true);
+    } else {
+      toggleDuePaid(teacherId, dueId);
+    }
+  };
+
+  const submitVoluntaryPayment = async () => {
+    if (!voluntaryPaymentData) return;
+    const amount = parseFloat(voluntaryPaymentData.amount);
+    if (isNaN(amount) || amount <= 0) {
+      showToast("Please enter a valid amount.");
+      return;
+    }
+    await toggleDuePaid(voluntaryPaymentData.teacherId, voluntaryPaymentData.dueId, amount);
+    setIsVoluntaryModalOpen(false);
+    setVoluntaryPaymentData(null);
+  };
+
   const deleteTeacher = async (id: string) => {
     if (profile?.role === 'admin') {
       try {
         const teacher = records.find(r => r.id === id);
         await deleteDoc(doc(db, 'teachers', id));
-        showToast("Teacher record removed.");
+        showToast("1 teacher record removed.");
         logActivity("Deleted Teacher", `Removed ${teacher?.name} from ${teacher?.gradeLevel}`, 'warning');
       } catch (error) {
         console.error("Error deleting teacher:", error);
@@ -935,32 +1705,6 @@ function AppContent() {
       console.error("Error cancelling teacher deletion:", error);
     }
   };
-
-  const filteredRecords = records
-    .filter(record => {
-      const matchesSearch = record.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                           record.email.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesGrade = selectedGrade === 'All' || record.gradeLevel === selectedGrade;
-      
-      const totalPaid = standardDues
-        .filter(d => record.paidDueIds.includes(d.id))
-        .reduce((sum, d) => {
-          if (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) {
-            return sum + record.voluntaryPayments[d.id];
-          }
-          return sum + d.amount;
-        }, 0);
-      const requiredDues = standardDues.filter(d => !d.isVoluntary);
-      const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
-      
-      const matchesPayment = paymentFilter === 'All' || 
-                            (paymentFilter === 'Paid' && isFullyPaid) || 
-                            (paymentFilter === 'Partial' && !isFullyPaid && totalPaid > 0) ||
-                            (paymentFilter === 'Pending' && totalPaid === 0);
-      
-      return matchesSearch && matchesGrade && matchesPayment;
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
 
   const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
   const paginatedRecords = filteredRecords.slice(
@@ -1021,28 +1765,64 @@ function AppContent() {
         } else {
           const rawName = String(row[nameIdx !== -1 ? nameIdx : 0]).trim();
           if (rawName.includes(',')) {
+            // Format: Last, First Middle
             const parts = rawName.split(',');
             lName = parts[0].trim();
-            const rest = parts[1].trim().split(' ');
-            fName = rest[0];
-            mInitial = rest.slice(1).join(' ');
-          } else {
-            // Try to split by space: First Middle Last
-            const parts = rawName.split(' ');
-            if (parts.length >= 3) {
-              fName = parts[0];
-              mInitial = parts[1];
-              lName = parts.slice(2).join(' ');
-            } else if (parts.length === 2) {
-              fName = parts[0];
-              lName = parts[1];
+            const firstMiddleParts = parts[1].trim().split(/\s+/);
+            
+            // Check if the last part is a middle initial (e.g., "C." or "C")
+            const lastPart = firstMiddleParts[firstMiddleParts.length - 1];
+            if (lastPart && (lastPart.length === 1 || (lastPart.length === 2 && lastPart.endsWith('.')))) {
+              mInitial = lastPart;
+              fName = firstMiddleParts.slice(0, -1).join(' ');
             } else {
-              lName = rawName;
+              fName = firstMiddleParts.join(' ');
+              mInitial = '';
+            }
+          } else {
+            // Format: First Middle Last
+            const parts = rawName.split(/\s+/);
+            
+            // Look for a middle initial as a separator
+            let initialIdx = -1;
+            for (let j = 0; j < parts.length; j++) {
+              const p = parts[j];
+              if (p.length === 1 || (p.length === 2 && p.endsWith('.'))) {
+                initialIdx = j;
+                break;
+              }
+            }
+
+            if (initialIdx !== -1) {
+              fName = parts.slice(0, initialIdx).join(' ');
+              mInitial = parts[initialIdx];
+              lName = parts.slice(initialIdx + 1).join(' ');
+            } else {
+              // No clear initial, look for common surname prefixes
+              const prefixes = ['de', 'del', 'dela', 'la', 'san', 'santa', 'sto', 'sta'];
+              let prefixIdx = -1;
+              for (let j = 0; j < parts.length; j++) {
+                if (prefixes.includes(parts[j].toLowerCase())) {
+                  prefixIdx = j;
+                  break;
+                }
+              }
+
+              if (prefixIdx !== -1 && prefixIdx > 0) {
+                fName = parts.slice(0, prefixIdx).join(' ');
+                lName = parts.slice(prefixIdx).join(' ');
+              } else if (parts.length >= 2) {
+                // Default: last word is surname
+                lName = parts[parts.length - 1];
+                fName = parts.slice(0, -1).join(' ');
+              } else {
+                lName = rawName;
+              }
             }
           }
         }
 
-        teacherName = `${lName}, ${fName}${mInitial ? ' ' + mInitial : ''}`;
+        teacherName = `${lName}, ${fName}${mInitial ? ' ' + mInitial.charAt(0).toUpperCase() + '.' : ''}`;
         const teacherEmail = String(emailIdx !== -1 ? row[emailIdx] : `${fName.toLowerCase()}.${lName.toLowerCase()}@example.com`);
         const contact = String(contactIdx !== -1 ? row[contactIdx] : 'N/A');
         
@@ -1058,7 +1838,7 @@ function AppContent() {
           name: teacherName,
           lastName: lName,
           firstName: fName,
-          middleInitial: mInitial,
+          middleInitial: mInitial ? mInitial.charAt(0).toUpperCase() + '.' : '',
           email: teacherEmail,
           contactNumber: contact,
           gradeLevel: grade,
@@ -1068,7 +1848,7 @@ function AppContent() {
         });
         count++;
       }
-      showToast(`Imported ${count} teachers.`);
+      showToast(`Successfully imported ${count} teachers.`);
     };
     reader.readAsBinaryString(file);
   };
@@ -1277,7 +2057,7 @@ function AppContent() {
   };
 
   const verifyRemittance = async (remId: string) => {
-    const isExecutive = profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com';
+    const isExecutive = profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com';
     if (profile?.role !== 'admin' && !isExecutive) return;
     
     showToast("Verifying remittance and sending email...");
@@ -1377,7 +2157,8 @@ function AppContent() {
             email: bodEmail, // Store their real email for reference
             role: 'bod',
             gradeLevel: gradeLevel,
-            name: `BOD (${gradeLevel}) - QR Login`
+            name: `BOD (${gradeLevel}) - QR Login`,
+            qrPass: randomPassword
           });
           
           setQrCodeData({ email: newQrEmail, pass: randomPassword, grade: gradeLevel, realEmail: bodEmail });
@@ -1393,7 +2174,8 @@ function AppContent() {
         email: bodEmail, // Store their real email for reference
         role: 'bod',
         gradeLevel: gradeLevel,
-        name: `BOD (${gradeLevel}) - QR Login`
+        name: `BOD (${gradeLevel}) - QR Login`,
+        qrPass: randomPassword
       });
 
       setQrCodeData({ email: qrEmail, pass: randomPassword, grade: gradeLevel, realEmail: bodEmail });
@@ -1452,11 +2234,13 @@ function AppContent() {
             email: teacherEmail, // Store their real email for reference
             role: 'teacher',
             gradeLevel: gradeLevel,
-            name: `${name} - QR Login`
+            name: `${name} - QR Login`,
+            qrEmail: newQrEmail, // Store for re-sending
+            qrPass: randomPassword // Store for re-sending if needed
           });
           
+          const qrData = JSON.stringify({ email: newQrEmail, pass: randomPassword, realEmail: teacherEmail });
           setQrCodeData({ email: newQrEmail, pass: randomPassword, grade: gradeLevel, realEmail: teacherEmail });
-          showToast("QR Code generated successfully.");
           return;
         }
         throw new Error(data.error?.message || "Failed to create QR account");
@@ -1468,11 +2252,13 @@ function AppContent() {
         email: teacherEmail, // Store their real email for reference
         role: 'teacher',
         gradeLevel: gradeLevel,
-        name: `${name} - QR Login`
+        name: `${name} - QR Login`,
+        qrEmail: qrEmail, // Store for re-sending
+        qrPass: randomPassword // Store for re-sending if needed
       });
       
+      const qrData = JSON.stringify({ email: qrEmail, pass: randomPassword, realEmail: teacherEmail });
       setQrCodeData({ email: qrEmail, pass: randomPassword, grade: gradeLevel, realEmail: teacherEmail });
-      showToast("QR Code generated successfully.");
     } catch (error: any) {
       console.error("QR Generation Error:", error);
       showToast(`Failed to generate QR code: ${error.message}`);
@@ -1480,6 +2266,58 @@ function AppContent() {
   };
 
 
+
+  const requestQRCode = async (email: string) => {
+    if (!email) return showToast("Please enter your registered email.");
+    setLoading(true);
+    showToast("Checking for existing QR code...");
+    try {
+      // 1. Try to find an existing QR login document for this teacher
+      const qQR = query(
+        collection(db, 'users'), 
+        where('email', '==', email), 
+        where('role', '==', 'teacher')
+      );
+      const qrSnapshot = await getDocs(qQR);
+      
+      // Filter for the QR Login document specifically
+      const qrDoc = qrSnapshot.docs.find(d => d.data().name?.endsWith(' - QR Login'));
+      
+      if (qrDoc) {
+        const data = qrDoc.data();
+        if (data.qrEmail && data.qrPass) {
+          const qrData = JSON.stringify({ email: data.qrEmail, pass: data.qrPass });
+          
+          // Re-send existing one
+          await fetch('/api/send-qr-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, qrData, name: data.name?.replace(' - QR Login', '') })
+          });
+          
+          showToast("Your existing QR code has been re-sent to your email.");
+          return;
+        }
+      }
+
+      // 2. If not found or missing data, find teacher record and generate new one
+      const qTeacher = query(collection(db, 'teachers'), where('email', '==', email));
+      const teacherSnapshot = await getDocs(qTeacher);
+      
+      if (teacherSnapshot.empty) {
+        showToast("No teacher record found with this email.");
+        return;
+      }
+      
+      const teacher = teacherSnapshot.docs[0].data();
+      await generateTeacherQRCode(teacher.email, teacher.gradeLevel, teacher.name);
+    } catch (error: any) {
+      console.error("Request QR Error:", error);
+      showToast(`Failed to request QR code: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const deleteUser = async (uid: string) => {
     if (profile?.role !== 'admin') return;
@@ -1497,18 +2335,65 @@ function AppContent() {
   };
 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [deletePassword, setDeletePassword] = useState('');
-  const [showDeletePassword, setShowDeletePassword] = useState(false);
+  const [isTestingEmail, setIsTestingEmail] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<{ 
+    configured: boolean, 
+    gmailUser: string | null, 
+    hasAppPassword: boolean,
+    logs?: { email: string, code: string, timestamp: number, success: boolean, error?: string, type?: 'otp' | 'qr' }[]
+  } | null>(null);
+
+  const checkEmailStatus = async () => {
+    try {
+      const response = await fetch('/api/email-status');
+      const data = await response.json();
+      setEmailStatus(data);
+    } catch (error) {
+      console.error("Failed to check email status:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'admin' && profile?.role === 'admin') {
+      checkEmailStatus();
+    }
+  }, [activeTab, profile]);
+
+  const testEmailSystem = async () => {
+    if (!profile || profile.role !== 'admin') return;
+    setIsTestingEmail(true);
+    showToast("Sending test email...");
+    
+    try {
+      const response = await fetch('/api/send-verification-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          email: user?.email || profile.email, 
+          code: "TEST12" 
+        })
+      });
+      
+      const result = await response.json();
+      if (result.success) {
+        if (result.simulated) {
+          showToast("Email system is in SIMULATION mode. GMAIL_USER is not set in environment variables.");
+        } else {
+          showToast("Test email sent! Check your inbox (and spam).");
+        }
+      } else {
+        throw new Error(result.error || "Failed to send test email");
+      }
+    } catch (error: any) {
+      console.error("Email Test Error:", error);
+      showToast(`Email Test Failed: ${error.message}`);
+    } finally {
+      setIsTestingEmail(false);
+    }
+  };
   const [remittanceIdToDelete, setRemittanceIdToDelete] = useState<string | null>(null);
 
   const deleteRemittance = async () => {
-    console.log("Attempting to delete remittance:", remittanceIdToDelete, "with password:", deletePassword, "Profile:", profile);
-    if (deletePassword.trim() !== '320302') {
-      showToast("Incorrect password.");
-      console.log("Incorrect password.");
-      return;
-    }
-
     if (!remittanceIdToDelete) {
       console.log("No remittance ID to delete.");
       return;
@@ -1552,8 +2437,6 @@ function AppContent() {
       showToast("Remittance record deleted instantly.");
       await new Promise(r => setTimeout(r, 500)); // Small delay for Firestore sync
       setIsDeleteModalOpen(false);
-      setDeletePassword('');
-      setShowDeletePassword(false);
       setRemittanceIdToDelete(null);
     } catch (error) {
       console.error("Delete Remittance Error:", error);
@@ -1567,8 +2450,11 @@ function AppContent() {
       return;
     }
 
-    const data = records.map(record => {
+    const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+
+    const data = sortedRecords.map((record, index) => {
       const row: any = {
+        'No.': index + 1,
         'Name': record.name,
         'Email': record.email,
         'Contact Number': record.contactNumber,
@@ -1576,11 +2462,16 @@ function AppContent() {
       };
 
       standardDues.forEach(due => {
-        if (due.isVoluntary) {
-          row[`${due.name} (Voluntary)`] = record.voluntaryPayments?.[due.id] || 0;
-        } else {
-          row[`${due.name} (Required)`] = record.paidDueIds.includes(due.id) ? due.amount : 0;
-        }
+        const isPaid = due.isVoluntary 
+          ? (record.voluntaryPayments?.[due.id] !== undefined && record.voluntaryPayments[due.id] > 0)
+          : record.paidDueIds.includes(due.id);
+        
+        const amountPaid = due.isVoluntary 
+          ? (record.voluntaryPayments?.[due.id] || 0)
+          : (record.paidDueIds.includes(due.id) ? due.amount : 0);
+
+        row[`${due.name} (Status)`] = isPaid ? 'Paid' : 'Not Paid';
+        row[`${due.name} (Amount Paid)`] = amountPaid;
       });
 
       const totalPaid = standardDues
@@ -1605,7 +2496,7 @@ function AppContent() {
     });
 
     // Add a summary row
-    const summaryRow: any = { 'Name': 'TOTAL SUMMARY' };
+    const summaryRow: any = { 'No.': '', 'Name': 'TOTAL SUMMARY' };
     standardDues.forEach(due => {
       summaryRow[`${due.name} (${due.isVoluntary ? 'Voluntary' : 'Required'})`] = records.reduce((sum, r) => {
         if (due.isVoluntary) return sum + (r.voluntaryPayments?.[due.id] || 0);
@@ -1625,21 +2516,254 @@ function AppContent() {
     logActivity("Exported Liquidation Report", `Exported ${records.length} records.`);
   };
 
+  const handleSendReminder = async (teacher: TeacherRecord) => {
+    if (isSendingReminder) return;
+    
+    // Filter only required dues (not voluntary)
+    const pendingDues = standardDues.filter(d => !teacher.paidDueIds.includes(d.id) && !d.isVoluntary);
+    const totalBalance = pendingDues.reduce((sum, d) => sum + d.amount, 0);
+
+    if (pendingDues.length === 0) {
+      showToast("Teacher has no pending required dues.");
+      return;
+    }
+
+    setIsSendingReminder(teacher.id);
+    showToast(`Sending reminder to ${teacher.name}...`);
+
+    try {
+      const response = await fetch('/api/send-reminder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: teacher.email,
+          name: teacher.name,
+          gender: teacher.gender,
+          totalBalance: totalBalance.toFixed(2),
+          pendingDues: pendingDues.map(d => ({ 
+            name: d.name, 
+            amount: d.amount.toFixed(2)
+          }))
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showToast(`Reminder sent to ${teacher.name}.`);
+        logActivity("Sent Reminder", `Payment reminder sent to ${teacher.name} (${teacher.email})`);
+      } else {
+        showToast(`Failed to send reminder: ${result.error}`);
+      }
+    } catch (error: any) {
+      console.error("Reminder Error:", error);
+      showToast("Failed to send reminder due to connection error.");
+    } finally {
+      setIsSendingReminder(null);
+    }
+  };
+
+  const handleDownloadTermsDocx = async () => {
+    try {
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation } = await import("docx");
+      const { saveAs } = await import("file-saver");
+
+      const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+
+      const tableRows = [
+        new TableRow({
+          children: [
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "No.", bold: true })] })], width: { size: 5, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true })] })], width: { size: 25, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Email", bold: true })] })], width: { size: 30, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Grade Level", bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Agreed?", bold: true })] })], width: { size: 10, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Date Agreed", bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+          ],
+        }),
+        ...sortedRecords.map((r, index) => new TableRow({
+          children: [
+            new TableCell({ children: [new Paragraph(`${index + 1}`)] }),
+            new TableCell({ children: [new Paragraph(r.name)] }),
+            new TableCell({ children: [new Paragraph(r.email)] }),
+            new TableCell({ children: [new Paragraph(r.gradeLevel)] }),
+            new TableCell({ children: [new Paragraph(r.termsAgreed ? "Yes" : "No")] }),
+            new TableCell({ children: [new Paragraph(r.termsAgreedDate ? new Date(r.termsAgreedDate).toLocaleDateString() : "N/A")] }),
+          ],
+        }))
+      ];
+
+      const doc = new Document({
+        sections: [{
+          properties: {
+            page: {
+              size: {
+                width: 18720, // 13 inches
+                height: 12240, // 8.5 inches
+                orientation: PageOrientation.LANDSCAPE,
+              },
+            },
+          },
+          children: [
+            new Paragraph({
+              text: "Faculty Club - Terms & Privacy Agreement Report",
+              heading: HeadingLevel.HEADING_1,
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 400 },
+            }),
+            new Paragraph({
+              text: `Generated on: ${new Date().toLocaleDateString()}`,
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 400 },
+            }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: tableRows,
+            }),
+          ],
+        }],
+      });
+
+      const blob = await Packer.toBlob(doc);
+      saveAs(blob, `Terms_Agreement_Report_${new Date().toISOString().split('T')[0]}.docx`);
+      showToast("Terms Agreement Report downloaded successfully.");
+    } catch (error) {
+      console.error("Error generating Terms Report:", error);
+      showToast("Failed to generate Terms Report.");
+    }
+  };
+
+  const handleArchiveSchoolYear = async () => {
+    if (profile?.role !== 'admin') return;
+    setIsArchiving(true);
+    showToast("Archiving school year data...");
+
+    try {
+      const batch = writeBatch(db);
+      const archiveId = `archive_${archiveYear}_${Date.now()}`;
+      
+      // 1. Create Archive Record
+      const archiveRef = doc(db, 'archives', archiveId);
+      batch.set(archiveRef, {
+        year: archiveYear,
+        timestamp: serverTimestamp(),
+        totalCollections,
+        totalExpenses,
+        netBalance,
+        teacherCount: records.length,
+        archivedBy: profile.name
+      });
+
+      // 2. Move Teachers to Archive Subcollection
+      for (const teacher of records) {
+        const teacherArchiveRef = doc(db, 'archives', archiveId, 'teachers', teacher.id);
+        batch.set(teacherArchiveRef, { ...teacher, archivedAt: serverTimestamp() });
+        
+        // Reset teacher balances for new year
+        const teacherRef = doc(db, 'teachers', teacher.id);
+        batch.update(teacherRef, {
+          paidDueIds: [],
+          voluntaryPayments: {},
+          paymentHistory: [],
+          remitted: false,
+          remittanceId: null,
+          remittedDueIds: [],
+          lastReceiptSent: null,
+          lastReferenceNumber: null
+        });
+      }
+
+      // 3. Move Expenses to Archive Subcollection
+      for (const expense of expenses) {
+        const expenseArchiveRef = doc(db, 'archives', archiveId, 'expenses', expense.id);
+        batch.set(expenseArchiveRef, { ...expense, archivedAt: serverTimestamp() });
+        
+        // Delete original expense
+        batch.delete(doc(db, 'expenses', expense.id));
+      }
+
+      // 4. Move Remittances to Archive Subcollection
+      for (const rem of remittances) {
+        const remArchiveRef = doc(db, 'archives', archiveId, 'remittances', rem.id);
+        batch.set(remArchiveRef, { ...rem, archivedAt: serverTimestamp() });
+        
+        // Delete original remittance
+        batch.delete(doc(db, 'remittances', rem.id));
+      }
+
+      // 5. Clear Audit Logs (Optional, but usually good for fresh start)
+      // We'll keep them but maybe tag them? For now let's just log the archive action
+      
+      await batch.commit();
+      
+      showToast(`School Year ${archiveYear} archived and system reset.`);
+      logActivity("Archived School Year", `Data for ${archiveYear} moved to history and balances reset.`, 'critical');
+      setShowArchiveModal(false);
+    } catch (error) {
+      console.error("Archive Error:", error);
+      showToast("Failed to archive school year.");
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
   const handleDownloadComprehensiveReportDocx = async () => {
     try {
       showToast("Generating Comprehensive Report...");
+
+      // Small delay to ensure charts in hidden container are fully rendered
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Capture charts from the hidden high-res container
+      const expenseChartEl = document.getElementById('capture-expense-pie-chart');
+      const collectionChartEl = document.getElementById('capture-collection-line-chart');
       
-      const totalCollections = records.reduce((sum, r) => {
-        const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
-        return sum + paidDues.reduce((s, d) => {
-          if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
-          return s + d.amount;
-        }, 0);
-      }, 0);
+      let expenseChartImg: Uint8Array | null = null;
+      let collectionChartImg: Uint8Array | null = null;
 
-      const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-      const netBalance = totalCollections - totalExpenses;
-
+      if (expenseChartEl) {
+        try {
+          const canvas = await html2canvas(expenseChartEl, { 
+            scale: 2,
+            backgroundColor: '#ffffff',
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+            removeContainer: true
+          });
+          const base64 = canvas.toDataURL('image/png');
+          const binaryString = window.atob(base64.split(',')[1]);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          expenseChartImg = bytes;
+        } catch (err) {
+          console.error("Failed to capture expense chart:", err);
+        }
+      }
+      
+      if (collectionChartEl) {
+        try {
+          const canvas = await html2canvas(collectionChartEl, { 
+            scale: 2,
+            backgroundColor: '#ffffff',
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+            removeContainer: true
+          });
+          const base64 = canvas.toDataURL('image/png');
+          const binaryString = window.atob(base64.split(',')[1]);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          collectionChartImg = bytes;
+        } catch (err) {
+          console.error("Failed to capture collection chart:", err);
+        }
+      }
+      
       // Part I: Summary Table
       const summaryTable = new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
@@ -1675,26 +2799,44 @@ function AppContent() {
       const collectionRows = [
         new TableRow({
           children: [
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "NO.", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TEACHER NAME", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRADE", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RECEIPT DATE", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
+            ...standardDues.map(due => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: due.name.toUpperCase(), bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } })),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TOTAL PAID", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "STATUS", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
           ],
         }),
       ];
 
-      records.forEach(r => {
+      const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+      sortedRecords.forEach((r, index) => {
         const paid = standardDues.filter(d => r.paidDueIds.includes(d.id)).reduce((s, d) => {
           if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
           return s + d.amount;
         }, 0);
         const totalReq = standardDues.filter(d => !d.isVoluntary).reduce((s, d) => s + d.amount, 0);
         const status = paid >= totalReq ? "Fully Paid" : paid > 0 ? "Partial" : "Pending";
+        const receiptDate = r.lastReceiptSent ? new Date(r.lastReceiptSent).toLocaleDateString() : "N/A";
+
+        const dueCells = standardDues.map(due => {
+          const isPaid = due.isVoluntary 
+            ? (r.voluntaryPayments?.[due.id] !== undefined && r.voluntaryPayments[due.id] > 0)
+            : r.paidDueIds.includes(due.id);
+          const amountPaid = due.isVoluntary 
+            ? (r.voluntaryPayments?.[due.id] || 0)
+            : (r.paidDueIds.includes(due.id) ? due.amount : 0);
+          return new TableCell({ children: [new Paragraph({ text: isPaid ? `Paid (₱${amountPaid})` : 'Not Paid', alignment: AlignmentType.CENTER })] });
+        });
 
         collectionRows.push(new TableRow({
           children: [
+            new TableCell({ children: [new Paragraph({ text: (index + 1).toString(), alignment: AlignmentType.CENTER })] }),
             new TableCell({ children: [new Paragraph({ text: r.name })] }),
             new TableCell({ children: [new Paragraph({ text: r.gradeLevel, alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ text: receiptDate, alignment: AlignmentType.CENTER })] }),
+            ...dueCells,
             new TableCell({ children: [new Paragraph({ text: `₱ ${paid.toLocaleString()}`, alignment: AlignmentType.RIGHT })] }),
             new TableCell({ children: [new Paragraph({ text: status, alignment: AlignmentType.CENTER })] }),
           ],
@@ -1705,6 +2847,7 @@ function AppContent() {
       const expenseRows = [
         new TableRow({
           children: [
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "NO.", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "DC2626" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DATE", bold: true, color: "FFFFFF" })] })], shading: { fill: "DC2626" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESCRIPTION", bold: true, color: "FFFFFF" })] })], shading: { fill: "DC2626" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "AMOUNT (₱)", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "DC2626" } }),
@@ -1712,9 +2855,10 @@ function AppContent() {
         }),
       ];
 
-      expenses.forEach(e => {
+      expenses.forEach((e, index) => {
         expenseRows.push(new TableRow({
           children: [
+            new TableCell({ children: [new Paragraph({ text: (index + 1).toString(), alignment: AlignmentType.CENTER })] }),
             new TableCell({ children: [new Paragraph({ text: e.timestamp?.toDate().toLocaleDateString() || "N/A" })] }),
             new TableCell({ children: [new Paragraph({ text: e.description })] }),
             new TableCell({ children: [new Paragraph({ text: `₱ ${e.amount.toLocaleString()}`, alignment: AlignmentType.RIGHT })] }),
@@ -1737,7 +2881,8 @@ function AppContent() {
             children: [
               new Paragraph({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", heading: HeadingLevel.HEADING_1, alignment: AlignmentType.CENTER }),
               new Paragraph({ text: "FACULTY CLUB OFFICERS", alignment: AlignmentType.CENTER }),
-              new Paragraph({ text: "COMPREHENSIVE FINANCIAL & LIQUIDATION REPORT", heading: HeadingLevel.HEADING_2, alignment: AlignmentType.CENTER, spacing: { before: 200, after: 400 } }),
+              new Paragraph({ text: "COMPREHENSIVE FINANCIAL & LIQUIDATION REPORT", heading: HeadingLevel.HEADING_2, alignment: AlignmentType.CENTER, spacing: { before: 200, after: 100 } }),
+              new Paragraph({ text: `Report Date: ${new Date().toLocaleDateString()}`, alignment: AlignmentType.CENTER, spacing: { after: 400 } }),
               
               new Paragraph({ text: "I. FINANCIAL SUMMARY", heading: HeadingLevel.HEADING_3, spacing: { before: 200, after: 200 } }),
               summaryTable,
@@ -1748,39 +2893,49 @@ function AppContent() {
               new Paragraph({ text: "III. EXPENSES BREAKDOWN", heading: HeadingLevel.HEADING_3, spacing: { before: 400, after: 200 } }),
               new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: expenseRows }),
 
+              new Paragraph({ text: "IV. VISUAL ANALYTICS", heading: HeadingLevel.HEADING_3, spacing: { before: 400, after: 200 } }),
+              ...(expenseChartImg ? [
+                new Paragraph({ text: "Expense Categories Distribution", alignment: AlignmentType.CENTER, spacing: { before: 200, after: 100 } }),
+                new Paragraph({
+                  children: [
+                    new ImageRun({
+                      data: expenseChartImg,
+                      transformation: { width: 500, height: 300 },
+                    } as any),
+                  ],
+                  alignment: AlignmentType.CENTER,
+                }),
+              ] : []),
+              ...(collectionTrendData.length > 0 && collectionChartImg ? [
+                new Paragraph({ text: "Collection Trends Over Time", alignment: AlignmentType.CENTER, spacing: { before: 400, after: 100 } }),
+                new Paragraph({
+                  children: [
+                    new ImageRun({
+                      data: collectionChartImg,
+                      transformation: { width: 600, height: 300 },
+                    } as any),
+                  ],
+                  alignment: AlignmentType.CENTER,
+                }),
+              ] : []),
+
               new Paragraph({ text: "", spacing: { before: 800 } }),
               new Table({
                 width: { size: 100, type: WidthType.PERCENTAGE },
-                rows: [
+                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
                   new TableRow({
-                    children: [
+                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
                       new TableCell({ 
                         children: [
-                          new Paragraph({ text: "Prepared by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: profile?.name || "____________________", bold: true })] }), 
-                          new Paragraph({ text: "Faculty Club Treasurer" })
+                          new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
+                          new Paragraph({ text: sig.title })
                         ], 
                         borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } 
-                      }),
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: "Noted by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: "____________________", bold: true })] }), 
-                          new Paragraph({ text: "Faculty Club President" })
-                        ], 
-                        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } 
-                      }),
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: "Approved by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: "____________________", bold: true })] }), 
-                          new Paragraph({ text: "School Principal" })
-                        ], 
-                        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } 
-                      }),
-                    ],
-                  }),
-                ],
+                      })
+                    )),
+                  })
+                )),
               }),
             ],
           },
@@ -1830,7 +2985,7 @@ function AppContent() {
       });
 
       // Total Row
-      const totalAmount = expenses.reduce((sum, e) => sum + e.amount, 0);
+      const totalAmount = totalExpenses;
       tableRows.push(
         new TableRow({
           children: [
@@ -1881,14 +3036,14 @@ function AppContent() {
               new Paragraph({ text: "", spacing: { before: 800 } }),
               new Table({
                 width: { size: 100, type: WidthType.PERCENTAGE },
-                rows: [
+                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
                   new TableRow({
-                    children: [
+                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
                       new TableCell({ 
                         children: [
-                          new Paragraph({ text: "Prepared by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: profile?.name || "____________________", bold: true })] }), 
-                          new Paragraph({ text: "Faculty Club Treasurer" })
+                          new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
+                          new Paragraph({ text: sig.title })
                         ], 
                         borders: { 
                           top: { style: BorderStyle.NONE }, 
@@ -1896,36 +3051,10 @@ function AppContent() {
                           left: { style: BorderStyle.NONE }, 
                           right: { style: BorderStyle.NONE } 
                         } 
-                      }),
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: "Noted by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: "____________________", bold: true })] }), 
-                          new Paragraph({ text: "Faculty Club President" })
-                        ], 
-                        borders: { 
-                          top: { style: BorderStyle.NONE }, 
-                          bottom: { style: BorderStyle.NONE }, 
-                          left: { style: BorderStyle.NONE }, 
-                          right: { style: BorderStyle.NONE } 
-                        } 
-                      }),
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: "Approved by:", spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: "____________________", bold: true })] }), 
-                          new Paragraph({ text: "School Principal" })
-                        ], 
-                        borders: { 
-                          top: { style: BorderStyle.NONE }, 
-                          bottom: { style: BorderStyle.NONE }, 
-                          left: { style: BorderStyle.NONE }, 
-                          right: { style: BorderStyle.NONE } 
-                        } 
-                      }),
-                    ],
-                  }),
-                ],
+                      })
+                    )),
+                  })
+                )),
               }),
             ],
           },
@@ -2197,17 +3326,36 @@ function AppContent() {
   const handleDeleteAllTeachers = async () => {
     setIsBatchDeleting(true);
     try {
-      const snapshot = await getDocs(collection(db, 'teachers'));
-      for (const docSnap of snapshot.docs) {
-        await deleteDoc(doc(db, 'teachers', docSnap.id));
-      }
-      showToast(`Successfully deleted all teacher records.`);
+      const batch = writeBatch(db);
+      
+      const teachersSnap = await getDocs(collection(db, 'teachers'));
+      teachersSnap.forEach(d => batch.delete(d.ref));
+      
+      const expensesSnap = await getDocs(collection(db, 'expenses'));
+      expensesSnap.forEach(d => batch.delete(d.ref));
+      
+      const remittancesSnap = await getDocs(collection(db, 'remittances'));
+      remittancesSnap.forEach(d => batch.delete(d.ref));
+      
+      const logsSnap = await getDocs(collection(db, 'audit_logs'));
+      logsSnap.forEach(d => batch.delete(d.ref));
+
+      const duesSnap = await getDocs(collection(db, 'dues'));
+      duesSnap.forEach(d => batch.delete(d.ref));
+
+      const balancesSnap = await getDocs(collection(db, 'initial_balances'));
+      balancesSnap.forEach(d => batch.delete(d.ref));
+      
+      await batch.commit();
+      
+      setIsBatchDeleteModalOpen(false);
+      setShowWipeSuccessModal(true);
+      logActivity("Wiped Database", "Admin performed a full database reset.", 'critical');
     } catch (error) {
       console.error("Delete All Error:", error);
-      showToast("Failed to delete all teachers.");
+      showToast("Failed to delete all records.");
     } finally {
       setIsBatchDeleting(false);
-      setIsBatchDeleteModalOpen(false);
     }
   };
 
@@ -2221,75 +3369,170 @@ function AppContent() {
 
   if ((!user || !profile)) {
     return (
-      <div className="min-h-screen bg-[#0038A8] flex items-center justify-center p-4 sm:p-8 relative overflow-hidden">
-        {/* Background decorations */}
-        <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0">
-           <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
-           <div className="absolute top-[20%] right-[-10%] w-[50%] h-[50%] bg-blue-400 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-           <div className="absolute bottom-[-20%] left-[20%] w-[60%] h-[60%] bg-[#FCD116] rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000"></div>
+      <div className="min-h-screen bg-[#001233] flex items-center justify-center p-4 sm:p-8 relative overflow-hidden">
+        {/* Moving Gradient Background */}
+        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none bg-gradient-to-br from-[#001233] via-[#0038A8] to-[#001233] bg-[length:400%_400%] animate-[gradientMove_15s_ease_infinite]">
+          <style>
+            {`
+              @keyframes gradientMove {
+                0% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+                100% { background-position: 0% 50%; }
+              }
+            `}
+          </style>
+          {/* Floating Bubbles */}
+          {BACKGROUND_PARTICLES.map((p) => (
+            <motion.div
+              key={p.id}
+              className="absolute rounded-full bg-gradient-to-tr from-white/5 to-white/20 backdrop-blur-[1px] border border-white/20 shadow-[inset_0_2px_4px_rgba(255,255,255,0.3)] pointer-events-none"
+              style={{
+                width: p.size,
+                height: p.size,
+                left: `${p.left}%`,
+                bottom: "-10%",
+              }}
+              animate={{
+                y: ["0vh", "-110vh"],
+                x: ["0vw", `${p.xOffset}vw`],
+                scale: p.pops ? [0.5, 1, 1, 1.4, 0] : [0.5, 1, 1],
+                opacity: p.pops ? [0, 0.4, 0.4, 0.6, 0] : [0, 0.4, 0.4]
+              }}
+              transition={{
+                duration: p.duration,
+                repeat: Infinity,
+                ease: "linear",
+                delay: p.delay,
+                times: p.pops ? [0, 0.1, 0.8, 0.9, 0.95] : [0, 0.1, 1]
+              }}
+            />
+          ))}
         </div>
 
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-white/95 backdrop-blur-xl p-8 sm:p-12 rounded-[2.5rem] shadow-2xl max-w-lg w-full text-center border border-white/50 relative z-10"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+          className="bg-white/90 backdrop-blur-2xl p-6 sm:p-10 md:p-14 rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] max-w-md lg:max-w-lg w-full text-center border border-white/60 relative z-10 overflow-hidden"
         >
-          <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 w-24 h-24 rounded-3xl flex items-center justify-center mx-auto mb-8 shadow-lg shadow-blue-500/30 transform -rotate-6 hover:rotate-0 transition-transform duration-300">
-            <Sun className="text-[#FCD116] animate-sun-rotate" size={48} fill="#FCD116" />
+          {/* Card Bubbles */}
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {CARD_PARTICLES.map((p) => (
+              <motion.div
+                key={p.id}
+                className="absolute rounded-full bg-blue-400/10 border border-blue-400/20 shadow-[inset_0_2px_4px_rgba(255,255,255,0.5)]"
+                style={{
+                  width: p.size,
+                  height: p.size,
+                  left: `${p.left}%`,
+                  top: `${p.top}%`,
+                }}
+                animate={{
+                  y: [0, p.yOffset * 2],
+                  x: [0, p.xOffset * 2],
+                  scale: [0, 1, 1.2, 0],
+                  opacity: [0, 0.3, 0.3, 0]
+                }}
+                transition={{
+                  duration: p.duration,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                  delay: p.delay,
+                  times: [0, 0.2, 0.8, 1]
+                }}
+              />
+            ))}
+          </div>
+          <motion.div 
+            whileHover={{ scale: 1.05, rotate: 0 }}
+            className="bg-gradient-to-br from-[#0038A8] to-blue-700 w-20 h-20 sm:w-24 sm:h-24 rounded-[2rem] flex items-center justify-center mx-auto mb-6 sm:mb-10 shadow-xl shadow-blue-500/40 transform -rotate-6 transition-all duration-500"
+          >
+            <Sun className="text-[#FCD116] animate-sun-rotate" size={40} fill="#FCD116" />
+          </motion.div>
+          
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-gray-900 mb-2 sm:mb-4 tracking-tighter uppercase leading-tight">
+            FACULTY CLUB
+          </h1>
+          <div className="flex items-center justify-center gap-3 mb-8 sm:mb-12">
+            <div className="h-px w-8 bg-blue-200"></div>
+            <p className="text-[#0038A8] font-black text-[10px] sm:text-xs uppercase tracking-[0.3em]">Dues Management</p>
+            <div className="h-px w-8 bg-blue-200"></div>
           </div>
           
-          <h1 className="text-4xl sm:text-5xl font-black text-gray-900 mb-3 tracking-tight">Faculty Club</h1>
-          <p className="text-[#0038A8] mb-10 font-bold text-sm uppercase tracking-[0.2em]">Dues Management System</p>
-          
-          <div className="space-y-6">
-            <div className="bg-gray-50/50 rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-inner">
-              <div className="flex items-center justify-center gap-2 mb-6">
-                <Shield className="text-gray-400" size={16} />
-                <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">Secure Access</p>
+          <div className="space-y-4 sm:space-y-6">
+            <div className="bg-gray-50/80 rounded-[2rem] p-6 sm:p-10 border border-gray-100/50 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]">
+              <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
+                <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                <p className="text-[10px] text-gray-400 uppercase tracking-widest font-black">Secure Portal Access</p>
               </div>
               
-              <button 
-                onClick={handleLogin}
-                className="w-full bg-[#0038A8] text-white py-4 px-6 rounded-2xl font-bold text-sm hover:bg-blue-800 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex items-center justify-center gap-3 group relative overflow-hidden"
-              >
-                <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-in-out"></div>
-                <div className="bg-white p-1.5 rounded-full relative z-10">
-                  <svg className="w-5 h-5" viewBox="0 0 24 24">
-                    <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                    <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                    <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                    <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
-                  </svg>
-                </div>
-                <span className="relative z-10">Continue with Google</span>
-              </button>
+              <div className="space-y-3 sm:space-y-4">
+                <button 
+                  onClick={handleLogin}
+                  className="w-full bg-[#0038A8] text-white py-4 sm:py-5 px-6 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest hover:bg-blue-800 hover:shadow-2xl hover:shadow-blue-500/30 hover:-translate-y-1 transition-all duration-300 flex items-center justify-center gap-3 group relative overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000 ease-in-out"></div>
+                  <div className="bg-white p-1.5 rounded-xl relative z-10 shadow-sm">
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24">
+                      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                    </svg>
+                  </div>
+                  <span className="relative z-10">Sign in with Google</span>
+                </button>
 
-              <div className="relative flex items-center py-5">
-                <div className="flex-grow border-t border-gray-200"></div>
-                <span className="flex-shrink-0 mx-4 text-gray-400 text-xs font-bold uppercase tracking-widest">Or</span>
-                <div className="flex-grow border-t border-gray-200"></div>
+                <div className="relative flex items-center py-4 sm:py-6">
+                  <div className="flex-grow border-t border-gray-200/60"></div>
+                  <span className="flex-shrink-0 mx-4 text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">Quick Login</span>
+                  <div className="flex-grow border-t border-gray-200/60"></div>
+                </div>
+
+                <button 
+                  onClick={() => setShowScanner(true)}
+                  className="w-full bg-white text-gray-700 border-2 border-gray-100 py-4 sm:py-5 px-6 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest hover:border-blue-200 hover:bg-blue-50/30 hover:text-[#0038A8] transition-all duration-300 flex items-center justify-center gap-3 group"
+                >
+                  <div className="bg-gray-100 p-1.5 rounded-xl group-hover:bg-blue-100 transition-colors shadow-sm">
+                    <QrCode size={18} className="text-gray-600 group-hover:text-[#0038A8]" />
+                  </div>
+                  <span>Scan QR Access</span>
+                </button>
               </div>
-
+            </div>
+            
+            <p className="text-[10px] sm:text-xs text-gray-400 font-bold px-4 leading-relaxed relative z-20">
+              By signing in, you agree to the Faculty Club's{' '}
               <button 
-                onClick={() => setShowScanner(true)}
-                className="w-full bg-white text-gray-700 border border-gray-200 py-4 px-6 rounded-2xl font-bold text-sm hover:bg-gray-50 hover:shadow-md transition-all duration-300 flex items-center justify-center gap-3 group"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowTermsModal(true);
+                }}
+                className="text-[#0038A8] hover:underline transition-all cursor-pointer relative z-30"
               >
-                <div className="bg-gray-100 p-1.5 rounded-full group-hover:bg-blue-100 transition-colors">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-600 group-hover:text-blue-600"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-                </div>
-                <span>Scan QR Code</span>
-              </button>
-              
-              <p className="mt-6 text-xs text-gray-500 font-medium leading-relaxed">
-                Faculty & BODs: Please use your registered email or scan your QR code to sign in.
+                terms of service
+              </button>{' '}
+              and{' '}
+              <button 
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setShowTermsModal(true);
+                }}
+                className="text-[#0038A8] hover:underline transition-all cursor-pointer relative z-30"
+              >
+                data privacy guidelines
+              </button>.
+            </p>
+
+            <div className="mt-10 pt-8 border-t border-gray-100/60">
+              <p className="text-[10px] text-gray-400 uppercase tracking-[0.3em] font-black">
+                Las Piñas CAA National High School
               </p>
             </div>
-          </div>
-
-          <div className="mt-10 pt-8 border-t border-gray-100">
-            <p className="text-[10px] text-gray-400 uppercase tracking-[0.3em] font-bold">
-              Las Piñas CAA National High School
-            </p>
           </div>
         </motion.div>
 
@@ -2307,15 +3550,85 @@ function AppContent() {
               >
                 <X size={20} />
               </button>
-              <h2 className="text-xl font-black text-center text-gray-900 mb-4">Scan QR Code</h2>
-              <div className="rounded-2xl overflow-hidden border-2 border-gray-100 mb-4 bg-black aspect-square relative">
-                <div id="qr-reader" className="w-full h-full"></div>
-                <div className="absolute inset-0 border-2 border-blue-500/30 pointer-events-none">
-                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-blue-500 rounded-tl-lg"></div>
-                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-blue-500 rounded-tr-lg"></div>
-                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-blue-500 rounded-bl-lg"></div>
-                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-blue-500 rounded-br-lg"></div>
+              <div className="flex items-center justify-between mb-4 px-2">
+                <h2 className="text-xl font-black text-gray-900">Scan QR Code</h2>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setTorchOn(prev => !prev)}
+                    className={`p-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold ${torchOn ? 'bg-yellow-100 text-yellow-600' : 'bg-gray-100 text-gray-600'}`}
+                    title="Toggle Flashlight"
+                  >
+                    <Sun size={14} />
+                    {torchOn ? 'On' : 'Off'}
+                  </button>
+                  <button 
+                    onClick={() => setScannerCameraMode(prev => prev === 'environment' ? 'user' : 'environment')}
+                    className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors flex items-center gap-2 text-xs font-bold"
+                    title="Switch Camera"
+                  >
+                    <RefreshCw size={14} />
+                    {scannerCameraMode === 'environment' ? 'Back' : 'Front'}
+                  </button>
                 </div>
+              </div>
+              <div className="rounded-2xl overflow-hidden border-2 border-gray-100 mb-4 bg-black aspect-square relative group">
+                <div id="qr-reader" className="w-full h-full"></div>
+                
+                {/* Darkened Overlay around Scanning Area */}
+                <div className="absolute inset-0 pointer-events-none z-10">
+                  <div className="absolute inset-0 bg-black/40"></div>
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[70%] bg-transparent shadow-[0_0_0_1000px_rgba(0,0,0,0.4)] rounded-2xl border-2 border-white/20"></div>
+                </div>
+
+                {/* Scanning Frame Corners */}
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[70%] h-[70%] pointer-events-none z-20">
+                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-blue-500 rounded-tl-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-blue-500 rounded-tr-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-blue-500 rounded-bl-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-blue-500 rounded-br-lg shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                </div>
+
+                {/* Scanning Line Animation */}
+                {!isScanSuccess && (
+                  <motion.div 
+                    initial={{ top: "15%" }}
+                    animate={{ top: "85%" }}
+                    transition={{ 
+                      duration: 2, 
+                      repeat: Infinity, 
+                      repeatType: "reverse",
+                      ease: "linear"
+                    }}
+                    className="absolute left-[15%] right-[15%] h-0.5 bg-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.8)] z-30 pointer-events-none"
+                  />
+                )}
+
+                {/* Success Flash Overlay */}
+                <AnimatePresence>
+                  {isScanSuccess && (
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute inset-0 bg-green-500/30 flex items-center justify-center z-40 backdrop-blur-[2px]"
+                    >
+                      <motion.div
+                        initial={{ scale: 0.5, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-2xl"
+                      >
+                        <Check size={40} className="text-green-500" />
+                      </motion.div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Camera Icon Overlay (when starting) */}
+                {!isScanSuccess && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+                    <Camera size={64} className="text-white" />
+                  </div>
+                )}
               </div>
               <p className="text-center text-sm text-gray-500 font-medium">
                 Position the QR code within the frame to log in instantly.
@@ -2326,6 +3639,94 @@ function AppContent() {
               >
                 Cancel
               </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* QR Verification Modal */}
+        {isVerifyingQR && qrLoginData && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-md w-full shadow-2xl text-center relative overflow-hidden border border-white/20"
+            >
+              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#0038A8] via-[#FCD116] to-[#CE1126]"></div>
+              
+              <button 
+                onClick={() => {
+                  setIsVerifyingQR(false);
+                  setQrLoginData(null);
+                  setVerificationCode('');
+                }}
+                className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="mb-8">
+                <div className="inline-flex p-5 bg-blue-50 rounded-3xl mb-6 shadow-inner">
+                  <Mail className="text-[#0038A8]" size={36} />
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 tracking-tight">Verify Your Identity</h2>
+                <p className="text-sm font-bold text-gray-400 mt-2 leading-relaxed">
+                  We've sent a 6-digit verification code to:<br/>
+                  <span className="text-[#0038A8] font-black lowercase tracking-tight">{qrLoginData.realEmail}</span>
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                <div className="relative">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={verificationInput}
+                    onChange={(e) => setVerificationInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Enter 6-digit code"
+                    className="w-full bg-gray-50 border-2 border-gray-100 py-5 px-6 rounded-2xl text-center text-3xl font-black tracking-[0.5em] text-[#0038A8] focus:border-[#0038A8] focus:bg-white transition-all outline-none placeholder:text-gray-200 placeholder:tracking-normal placeholder:text-sm"
+                  />
+                  {verificationInput.length === 6 && (
+                    <motion.div 
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 bg-green-500 text-white p-1 rounded-full shadow-lg"
+                    >
+                      <Check size={16} />
+                    </motion.div>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  <button 
+                    onClick={handleVerifyQR}
+                    disabled={verificationInput.length !== 6 || loading}
+                    className="w-full bg-[#0038A8] text-white py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] hover:bg-blue-800 transition-all shadow-xl shadow-blue-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={20} /> : <ShieldCheck size={20} />}
+                    Verify & Login
+                  </button>
+
+                  <button 
+                    onClick={() => sendVerificationCode(qrLoginData.realEmail)}
+                    disabled={resendTimer > 0}
+                    className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-[#0038A8] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {resendTimer > 0 ? (
+                      `Resend code in ${resendTimer}s`
+                    ) : (
+                      <>
+                        <RefreshCw size={14} />
+                        Resend Verification Code
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <p className="mt-8 text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed">
+                Code expires in 1 minute.<br/>
+                Check your spam folder if you don't see it.
+              </p>
             </motion.div>
           </div>
         )}
@@ -2372,27 +3773,47 @@ function AppContent() {
             </motion.div>
           </div>
         )}
+        <GlobalOverlays showTermsModal={showTermsModal} setShowTermsModal={setShowTermsModal} showLoginSuccess={showLoginSuccess} toast={toast} />
       </div>
     );
   }
 
   if (profile?.role === 'teacher') {
-    const teacherRecord = records.find(r => r.email === profile?.email);
+    const teacherRecord = records.find(r => r.email.toLowerCase().trim() === profile?.email?.toLowerCase().trim());
     
+    // Force terms modal if not agreed
+    const hasAgreed = teacherRecord?.termsAgreed === true;
+    const needsToAgreeTerms = !hasAgreed;
+
+    if (needsToAgreeTerms) {
+      return (
+        <div className="h-[100dvh] bg-[#F8FAFC] flex items-center justify-center p-4">
+          <GlobalOverlays 
+            showTermsModal={true} 
+            setShowTermsModal={setShowTermsModal} 
+            showLoginSuccess={showLoginSuccess} 
+            toast={toast} 
+            profile={profile}
+            teacherRecord={teacherRecord}
+            onAgreeTerms={handleAgreeTerms}
+            records={records}
+          />
+        </div>
+      );
+    }
+
     // Calculate balances
-    const totalDuesAmount = standardDues.reduce((sum, d) => sum + d.amount, 0);
+    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+    const totalRequiredAmount = requiredDues.reduce((sum, d) => sum + d.amount, 0);
     
     // Total Paid Amount should be the sum of all payments in history
     const totalPaidAmount = (teacherRecord?.paymentHistory || []).reduce((sum, p) => sum + p.amount, 0);
     
-    // Remaining balance is based on CURRENT active dues
-    const currentPaidAmount = standardDues.filter(d => teacherRecord?.paidDueIds.includes(d.id)).reduce((sum, d) => {
-      if (d.isVoluntary && teacherRecord?.voluntaryPayments?.[d.id]) return sum + teacherRecord.voluntaryPayments[d.id];
-      return sum + d.amount;
-    }, 0);
-    const remainingBalance = Math.max(0, totalDuesAmount - currentPaidAmount);
-    const unpaidDues = standardDues.filter(d => !teacherRecord?.paidDueIds.includes(d.id));
-    const settledCurrentDuesCount = standardDues.filter(d => teacherRecord?.paidDueIds.includes(d.id)).length;
+    // Remaining balance is based on CURRENT active REQUIRED dues
+    const currentPaidRequiredAmount = requiredDues.filter(d => teacherRecord?.paidDueIds.includes(d.id)).reduce((sum, d) => sum + d.amount, 0);
+    const remainingBalance = Math.max(0, totalRequiredAmount - currentPaidRequiredAmount);
+    const unpaidRequiredDues = requiredDues.filter(d => !teacherRecord?.paidDueIds.includes(d.id));
+    const settledRequiredDuesCount = requiredDues.filter(d => teacherRecord?.paidDueIds.includes(d.id)).length;
 
     return (
       <div className="min-h-screen bg-gray-50 font-sans pb-12">
@@ -2417,6 +3838,16 @@ function AppContent() {
           </div>
         </header>
 
+        {!hasAgreed ? (
+          <main className="max-w-5xl mx-auto px-4 mt-8 flex items-center justify-center min-h-[60vh]">
+            <div className="text-center space-y-4">
+              <ShieldAlert size={48} className="mx-auto text-[#0038A8] opacity-20" />
+              <h2 className="text-xl font-black text-gray-400 uppercase tracking-widest">Agreement Required</h2>
+              <p className="text-sm text-gray-500">Please read and agree to the Terms & Privacy Guidelines to access your dashboard.</p>
+            </div>
+          </main>
+        ) : (
+        <>
         <main className="max-w-5xl mx-auto px-4 mt-8 space-y-8">
           {/* Welcome & Quick Actions */}
           <div className="flex flex-col lg:flex-row gap-6">
@@ -2450,7 +3881,14 @@ function AppContent() {
                     className="flex items-center justify-center gap-2 bg-blue-50 text-[#0038A8] py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-100 transition-all active:scale-95"
                   >
                     <QrCode size={18} />
-                    Generate QR Code
+                    Regenerate QR
+                  </button>
+                  <button 
+                    onClick={() => setShowTermsModal(true)}
+                    className="flex items-center justify-center gap-2 bg-white text-gray-400 border border-gray-100 py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-50 hover:text-[#0038A8] transition-all active:scale-95"
+                  >
+                    <ShieldCheck size={18} />
+                    Terms & Privacy
                   </button>
                 </div>
               </div>
@@ -2466,12 +3904,12 @@ function AppContent() {
                   <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden">
                     <div 
                       className="bg-[#FCD116] h-full transition-all duration-1000 ease-out" 
-                      style={{ width: `${totalDuesAmount > 0 ? (currentPaidAmount / totalDuesAmount) * 100 : 0}%` }}
+                      style={{ width: `${totalRequiredAmount > 0 ? (currentPaidRequiredAmount / totalRequiredAmount) * 100 : 0}%` }}
                     ></div>
                   </div>
                   <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest opacity-80">
                     <span>Settlement Progress</span>
-                    <span>{((currentPaidAmount / totalDuesAmount) * 100).toFixed(0)}%</span>
+                    <span>{totalRequiredAmount > 0 ? ((currentPaidRequiredAmount / totalRequiredAmount) * 100).toFixed(0) : 100}%</span>
                   </div>
                 </div>
 
@@ -2480,9 +3918,9 @@ function AppContent() {
                     <AlertCircle size={16} className="text-blue-100" />
                   </div>
                   <p className="text-[10px] font-bold text-blue-50 leading-relaxed">
-                    {unpaidDues.length > 0 
-                      ? `You have ${unpaidDues.length} unpaid dues. Please settle them with your BOD to maintain a verified status.`
-                      : "All dues are settled. Your account is currently in good standing. Thank you!"}
+                    {unpaidRequiredDues.length > 0 
+                      ? `You have ${unpaidRequiredDues.length} unpaid required dues. Please settle them with your BOD to maintain a verified status.`
+                      : "All required dues are settled. Your account is currently in good standing. Thank you!"}
                   </p>
                 </div>
               </div>
@@ -2506,9 +3944,21 @@ function AppContent() {
                 <div className="bg-blue-50 p-2 rounded-xl text-blue-600">
                   <CheckCircle size={20} />
                 </div>
-                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Dues Settled</span>
+                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Required Dues</span>
               </div>
-              <div className="text-2xl font-black text-gray-900">{settledCurrentDuesCount} / {standardDues.length}</div>
+              <div className="text-2xl font-black text-gray-900">{settledRequiredDuesCount} / {requiredDues.length}</div>
+            </div>
+
+            <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="bg-purple-50 p-2 rounded-xl text-purple-600">
+                  <Heart size={20} />
+                </div>
+                <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Voluntary</span>
+              </div>
+              <div className="text-2xl font-black text-gray-900">
+                {standardDues.filter(d => d.isVoluntary && teacherRecord?.paidDueIds.includes(d.id)).length} Paid
+              </div>
             </div>
 
             <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
@@ -2518,7 +3968,7 @@ function AppContent() {
                 </div>
                 <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Pending</span>
               </div>
-              <div className="text-2xl font-black text-gray-900">{unpaidDues.length} {unpaidDues.length === 1 ? 'Item' : 'Items'}</div>
+              <div className="text-2xl font-black text-gray-900">{unpaidRequiredDues.length} {unpaidRequiredDues.length === 1 ? 'Item' : 'Items'}</div>
             </div>
 
             <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
@@ -2551,7 +4001,7 @@ function AppContent() {
                 {showDues && (
                   <section>
                     <div className="flex items-center justify-between mb-6">
-                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{unpaidDues.length} {unpaidDues.length === 1 ? 'Item' : 'Items'} Pending</span>
+                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{unpaidRequiredDues.length} {unpaidRequiredDues.length === 1 ? 'Item' : 'Items'} Pending</span>
                     </div>
                     
                     <div className="space-y-3">
@@ -2565,12 +4015,28 @@ function AppContent() {
                                   {isPaid ? <Check size={24} /> : <Clock size={24} />}
                                 </div>
                                 <div>
-                                  <div className="font-black text-gray-900">{due.name}</div>
-                                  <div className="text-xs font-bold text-gray-400">₱{due.amount.toFixed(2)}</div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="font-black text-gray-900">{due.name}</div>
+                                    {due.isVoluntary && (
+                                      <span className="text-[8px] font-black text-purple-500 bg-purple-50 px-1.5 py-0.5 rounded-md uppercase tracking-widest">Voluntary</span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs font-bold text-gray-400">
+                                    {due.isVoluntary && isPaid 
+                                      ? `₱${(teacherRecord?.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
+                                      : `₱${due.amount.toFixed(2)}`
+                                    }
+                                  </div>
                                 </div>
                               </div>
-                              <div className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest ${isPaid ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-600'}`}>
-                                {isPaid ? 'Settled' : 'Unpaid'}
+                              <div className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest ${
+                                isPaid 
+                                  ? 'bg-green-50 text-green-600' 
+                                  : due.isVoluntary 
+                                    ? 'bg-purple-50 text-purple-600' 
+                                    : 'bg-yellow-50 text-yellow-600'
+                              }`}>
+                                {isPaid ? 'Settled' : due.isVoluntary ? 'Optional' : 'Unpaid'}
                               </div>
                             </div>
                           </div>
@@ -2739,7 +4205,7 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100 text-center relative"
+              className="bg-white rounded-[2.5rem] p-6 sm:p-10 md:p-12 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-100 text-center relative"
             >
               <button 
                 onClick={() => setQrCodeData(null)}
@@ -2749,28 +4215,35 @@ function AppContent() {
               </button>
               
               <div id="qr-code-capture-area-teacher" className="bg-white p-4 rounded-2xl">
-                <h3 className="text-2xl font-black text-gray-900 mb-2">Teacher Login QR Code</h3>
-                <p className="text-gray-500 font-bold mb-6 text-sm">
+                <h3 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">Teacher Login QR Code</h3>
+                <p className="text-gray-500 font-bold mb-8 text-sm sm:text-base">
                   Teacher
                 </p>
                 
-                <div className="bg-white p-4 rounded-2xl shadow-inner border border-gray-100 inline-block mb-4">
+                <div className="bg-white p-4 rounded-2xl border-2 border-blue-100 shadow-lg shadow-blue-50/50 mb-8 w-48 h-48 sm:w-64 sm:h-64 mx-auto flex items-center justify-center">
                   <QRCodeCanvas 
                     id="teacher-qr-canvas"
-                    value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass })} 
-                    size={200}
+                    value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass, realEmail: qrCodeData.realEmail })} 
+                    size={256}
+                    className="w-full h-full"
                     level="H"
                     includeMargin={true}
+                    imageSettings={{
+                      src: SUN_LOGO_SVG,
+                      height: 48,
+                      width: 48,
+                      excavate: true,
+                    }}
                   />
                 </div>
 
-                <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 mb-6">
-                  <p className="text-xs text-blue-800 font-medium leading-relaxed mb-2">
+                <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100 mb-6">
+                  <p className="text-sm sm:text-base text-blue-800 font-medium leading-relaxed mb-3">
                     Scan this QR code next time you log in.
                   </p>
-                  <div className="flex items-start gap-2 mt-3 pt-3 border-t border-blue-200/50">
-                    <ShieldAlert size={16} className="text-blue-600 shrink-0 mt-0.5" />
-                    <p className="text-[10px] text-blue-700 font-bold text-left">
+                  <div className="flex items-start gap-3 mt-4 pt-4 border-t border-blue-200/50">
+                    <ShieldAlert size={20} className="text-blue-600 shrink-0 mt-0.5" />
+                    <p className="text-xs sm:text-sm text-blue-700 font-bold text-left">
                       Note: Please keep this QR code safe and private, as it grants direct access to your account.
                     </p>
                   </div>
@@ -2782,16 +4255,17 @@ function AppContent() {
                   onClick={() => downloadQRCode(
                     'teacher-qr-canvas', 
                     `FacultyClub_QR_${profile.name.replace(/\s+/g, '_')}.png`,
-                    qrCodeData.realEmail || qrCodeData.email
+                    qrCodeData.realEmail || qrCodeData.email,
+                    qrCodeData.grade
                   )}
-                  className="w-full py-4 bg-purple-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-purple-100"
+                  className="w-full py-4 sm:py-5 bg-purple-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-purple-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-purple-100"
                 >
-                  <Download size={16} />
+                  <Download size={18} />
                   Download QR Code
                 </button>
                 <button 
                   onClick={() => setQrCodeData(null)}
-                  className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className="w-full py-4 sm:py-5 bg-gray-100 text-gray-600 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-gray-200 transition-all"
                 >
                   Done
                 </button>
@@ -2799,12 +4273,24 @@ function AppContent() {
             </motion.div>
           </div>
         )}
+        </>
+        )}
+        <GlobalOverlays 
+          showTermsModal={showTermsModal} 
+          setShowTermsModal={setShowTermsModal} 
+          showLoginSuccess={showLoginSuccess} 
+          toast={toast} 
+          profile={profile}
+          teacherRecord={teacherRecord}
+          onAgreeTerms={handleAgreeTerms}
+          records={records}
+        />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans flex flex-col lg:flex-row overflow-hidden">
+    <div className="h-[100dvh] bg-[#F8FAFC] font-sans flex flex-col lg:flex-row overflow-hidden">
       {/* Mobile Header */}
       <header className="lg:hidden bg-[#0038A8] text-white p-4 flex items-center justify-between sticky top-0 z-40 shadow-lg">
         <div className="flex items-center gap-3">
@@ -2833,37 +4319,49 @@ function AppContent() {
             initial={{ x: -300, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -300, opacity: 0 }}
-            className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-white border-r border-gray-100 flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 ${
+            className={`fixed lg:static inset-y-0 left-0 z-50 w-72 lg:w-80 bg-white border-r border-gray-100 flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 ${
               isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
             }`}
           >
-            <div className="p-8">
+            <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
               <div className="flex items-center gap-4 mb-10">
                 <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200 transform -rotate-6">
                   <Sun className="text-[#FCD116] animate-sun-rotate" size={28} fill="#FCD116" />
                 </div>
                 <div>
-                  <h1 className="text-xl font-black text-gray-900 leading-none tracking-tight">Faculty Club</h1>
-                  <p className="text-[10px] text-[#0038A8] font-black uppercase tracking-widest mt-1">Management System</p>
+                  <h1 className="text-xl lg:text-2xl font-black text-gray-900 leading-none tracking-tight">Faculty Club</h1>
+                  <p className="text-[10px] lg:text-xs text-[#0038A8] font-black uppercase tracking-widest mt-1">Management System</p>
                 </div>
               </div>
 
               <nav className="space-y-2">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Main Menu</p>
+                <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Main Menu</p>
                 <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
                 <NavItem id="collection" icon={Users} label="Collection" />
                 <NavItem id="remittance" icon={Wallet} label="Remittances" />
                 
                 <div className="pt-6">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Administrative</p>
+                  <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Administrative</p>
                   <NavItem id="admin" icon={Shield} label="Admin Panel" role="admin" />
+                  <NavItem id="settings" icon={Settings} label="Report Settings" role="admin" />
                   <NavItem id="expenses" icon={CreditCard} label="Expenses" role="admin" />
                   <NavItem id="audit" icon={History} label="Audit Logs" role="admin" />
                 </div>
 
                 <div className="pt-6">
-                  <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Account</p>
+                  <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Account</p>
                   <NavItem id="profile" icon={User} label="My Profile" />
+                  <button
+                    onClick={() => setShowTermsModal(true)}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 text-gray-500 hover:bg-blue-50 hover:text-[#0038A8] group"
+                  >
+                    <div className="p-2 rounded-xl bg-gray-100 group-hover:bg-white transition-colors">
+                      <ShieldCheck size={18} className="text-gray-500 group-hover:text-[#0038A8]" />
+                    </div>
+                    <span className="text-xs lg:text-sm font-black uppercase tracking-widest opacity-70 group-hover:opacity-100">
+                      Terms & Privacy
+                    </span>
+                  </button>
                 </div>
               </nav>
             </div>
@@ -2874,13 +4372,13 @@ function AppContent() {
                   {profile.name.charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-black text-gray-900 truncate">{profile.name}</p>
-                  <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">{profile.role} • {profile.gradeLevel}</p>
+                  <p className="text-xs lg:text-sm font-black text-gray-900 truncate">{profile.name}</p>
+                  <p className="text-[9px] lg:text-[10px] text-gray-400 font-bold uppercase tracking-widest">{profile.role} • {profile.gradeLevel}</p>
                 </div>
               </div>
               <button 
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-red-50 text-red-600 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-all group"
+                className="w-full flex items-center justify-center gap-2 py-3 bg-red-50 text-red-600 rounded-2xl text-[10px] lg:text-xs font-black uppercase tracking-widest hover:bg-red-100 transition-all group"
               >
                 <LogOut size={14} className="group-hover:-translate-x-1 transition-transform" /> Sign Out
               </button>
@@ -2890,12 +4388,12 @@ function AppContent() {
       </AnimatePresence>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+      <main className="flex-1 flex flex-col min-h-0 relative">
         {/* Top Bar (Desktop) */}
         <header className="hidden lg:flex items-center justify-between px-10 py-6 bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-30">
           <div>
-            <h2 className="text-2xl font-black text-gray-900 capitalize tracking-tight">{activeTab.replace('-', ' ')}</h2>
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">
+            <h2 className="text-2xl lg:text-3xl font-black text-gray-900 capitalize tracking-tight">{activeTab.replace('-', ' ')}</h2>
+            <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
               {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
             </p>
           </div>
@@ -2903,14 +4401,88 @@ function AppContent() {
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 rounded-2xl border border-blue-100">
               <Activity size={14} className="text-[#0038A8]" />
-              <span className="text-[10px] font-black text-[#0038A8] uppercase tracking-widest">System Active</span>
+              <span className="text-[10px] lg:text-xs font-black text-[#0038A8] uppercase tracking-widest">System Active</span>
             </div>
           </div>
         </header>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-10 custom-scrollbar">
-          <AnimatePresence mode="wait">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-12 custom-scrollbar">
+          {/* Hidden container for chart capture (ensures charts are always available for DOCX export) */}
+      <div className="fixed -left-[9999px] top-0 pointer-events-none opacity-0" aria-hidden="true">
+          <div id="capture-expense-pie-chart" className="w-[1000px] h-[600px] bg-white p-10 flex flex-col items-center justify-center">
+            <h3 className="text-2xl font-black text-gray-900 uppercase mb-8">Expense Categories Distribution</h3>
+            <div className="w-[800px] h-[400px]">
+              {expenseChartData.length > 0 ? (
+                <RePieChart width={800} height={400}>
+                  <Pie
+                    data={expenseChartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={80}
+                    outerRadius={150}
+                    paddingAngle={5}
+                    dataKey="value"
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  >
+                    {expenseChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={['#0038A8', '#CE1126', '#FCD116', '#007A33', '#6A2C91', '#FF6321'][index % 6]} />
+                    ))}
+                  </Pie>
+                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                </RePieChart>
+              ) : (
+                <div className="text-center">
+                  <PieChart size={64} className="text-gray-200 mx-auto mb-4" />
+                  <p className="text-gray-400 font-black uppercase tracking-widest">No Expense Data</p>
+                </div>
+              )}
+            </div>
+          </div>
+          <div id="capture-collection-line-chart" className="w-[1000px] h-[600px] bg-white p-10 flex flex-col items-center justify-center">
+            <h3 className="text-2xl font-black text-gray-900 uppercase mb-8">Collection Trends & Growth</h3>
+            <div className="w-[800px] h-[400px]">
+              {collectionTrendData.length > 0 ? (
+                <ComposedChart width={800} height={400} data={collectionTrendData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis 
+                    dataKey="name" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fontSize: 14, fontWeight: 700, fill: '#64748b' }}
+                  />
+                  <YAxis 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fontSize: 14, fontWeight: 700, fill: '#64748b' }}
+                    tickFormatter={(value) => `₱${value.toLocaleString()}`}
+                  />
+                  <ReTooltip 
+                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    formatter={(value: any) => [`₱${value.toLocaleString()}`, '']}
+                  />
+                  <Legend verticalAlign="top" align="right" />
+                  <Bar dataKey="monthly" name="Monthly Collection" fill="#0038A8" radius={[4, 4, 0, 0]} barSize={40} />
+                  <Line 
+                    type="monotone" 
+                    dataKey="cumulative" 
+                    name="Cumulative Total"
+                    stroke="#CE1126" 
+                    strokeWidth={4} 
+                    dot={{ r: 6, fill: '#CE1126', strokeWidth: 2, stroke: '#fff' }}
+                  />
+                </ComposedChart>
+              ) : (
+                <div className="text-center">
+                  <TrendingUp size={64} className="text-gray-200 mx-auto mb-4" />
+                  <p className="text-gray-400 font-black uppercase tracking-widest">No Collection Trends</p>
+                </div>
+              )}
+            </div>
+          </div>
+      </div>
+
+      <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
               initial={{ opacity: 0, y: 10 }}
@@ -2928,38 +4500,46 @@ function AppContent() {
                     
                     <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
                       <div className="max-w-xl">
-                        <h1 className="text-3xl md:text-5xl font-black mb-4 tracking-tight">
+                        <h1 className="text-3xl md:text-5xl lg:text-6xl font-black mb-4 tracking-tight">
                           Welcome back, {profile.name.split(' ')[0]}! 
                           <span className="inline-block animate-wave origin-[70%_70%]">👋</span>
                         </h1>
                         <p className="text-blue-100 text-sm md:text-base font-medium leading-relaxed opacity-90">
-                          Here's what's happening with the Faculty Club finances today. {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com') && `You have ${remittances.filter(r => r.status === 'pending').length} pending remittances to verify.`}
+                          Here's what's happening with the Faculty Club finances today. {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com') && `You have ${remittances.filter(r => r.status === 'pending').length} pending remittances to verify.`}
                         </p>
                         <div className="flex flex-wrap gap-3 mt-8">
-                          <button onClick={() => setActiveTab('collection')} className="bg-white text-[#0038A8] px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg">
+                          <button onClick={() => setActiveTab('collection')} className="bg-white text-[#0038A8] px-6 py-3 rounded-2xl text-xs lg:text-sm font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg">
                             Manage Collections
                           </button>
-                          {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
-                            <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all">
+                          {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com') && (
+                            <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-6 py-3 rounded-2xl text-xs lg:text-sm font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all">
                               View Remittances
                             </button>
                           )}
                         </div>
                       </div>
                       
-                      <div className="bg-white/10 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/20 flex flex-col items-center text-center min-w-[240px]">
-                        <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-70 mb-2">Net Club Balance</div>
-                        <div className="text-4xl font-black tracking-tighter mb-4">
-                          ₱{(records.reduce((sum, r) => {
-                            const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
-                            return sum + paidDues.reduce((s, d) => {
-                              if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
-                              return s + d.amount;
-                            }, 0);
-                          }, 0) - expenses.reduce((sum, e) => sum + e.amount, 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                        </div>
-                        <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest bg-green-500/20 text-green-300 px-3 py-1 rounded-full">
-                          <TrendingUp size={12} /> Updated Just Now
+                      <div className="bg-white/10 backdrop-blur-xl p-6 rounded-[2.5rem] border border-white/20 flex flex-col items-center text-center min-w-[240px]">
+                        <div className="text-[10px] lg:text-xs font-black uppercase tracking-[0.2em] opacity-70 mb-4">Financial Summary</div>
+                        <div className="grid grid-cols-1 gap-2 w-full">
+                          <div className="flex justify-between items-center text-xs lg:text-sm">
+                            <span className="opacity-70">Remitted:</span>
+                            <span className="font-bold">₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs lg:text-sm">
+                            <span className="opacity-70">Initial Balance:</span>
+                            <span className="font-bold">₱{totalInitialBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs lg:text-sm">
+                            <span className="opacity-70">Expenses:</span>
+                            <span className="font-bold text-red-300">-₱{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+                          <div className="border-t border-white/20 my-2 pt-2 flex justify-between items-center">
+                            <span className="font-bold lg:text-lg">Net Balance:</span>
+                            <span className="text-2xl lg:text-3xl font-black tracking-tighter">
+                              ₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2976,8 +4556,8 @@ function AppContent() {
                           <ArrowUpRight size={14} /> +2.5%
                         </div>
                       </div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Faculty</p>
-                      <h3 className="text-2xl font-black text-gray-900">{records.length}</h3>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Faculty</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">{records.length}</h3>
                     </div>
 
                     <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
@@ -2986,18 +4566,12 @@ function AppContent() {
                           <CheckCircle size={24} />
                         </div>
                         <div className="text-[10px] font-black text-green-600">
-                          {((records.filter(r => {
-                            const requiredDues = standardDues.filter(d => !d.isVoluntary);
-                            return requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
-                          }).length / (records.length || 1)) * 100).toFixed(0)}%
+                          {((fullyPaidCount / (records.length || 1)) * 100).toFixed(0)}%
                         </div>
                       </div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Fully Paid</p>
-                      <h3 className="text-2xl font-black text-gray-900">
-                        {records.filter(r => {
-                          const requiredDues = standardDues.filter(d => !d.isVoluntary);
-                          return requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
-                        }).length}
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Fully Paid</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">
+                        {fullyPaidCount}
                       </h3>
                     </div>
 
@@ -3010,8 +4584,8 @@ function AppContent() {
                           <ArrowDownRight size={14} /> -₱2.4k
                         </div>
                       </div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Total Expenses</p>
-                      <h3 className="text-2xl font-black text-gray-900">₱{expenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()}</h3>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Expenses</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalExpenses.toLocaleString()}</h3>
                     </div>
 
                     <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
@@ -3023,8 +4597,113 @@ function AppContent() {
                           {standardDues.length} {standardDues.length === 1 ? 'Item' : 'Items'}
                         </div>
                       </div>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Active Dues</p>
-                      <h3 className="text-2xl font-black text-gray-900">₱{standardDues.reduce((sum, d) => sum + d.amount, 0).toLocaleString()}</h3>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Active Dues</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalDuesAmount.toLocaleString()}</h3>
+                    </div>
+                  </div>
+
+                  {/* Visual Analytics Section */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div id="expense-pie-chart" className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="p-3 bg-red-50 rounded-2xl text-red-600">
+                          <PieChart size={24} />
+                        </div>
+                        <div>
+                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Expense Categories</h3>
+                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Distribution of club spending</p>
+                        </div>
+                      </div>
+                      <div className="h-[300px] w-full flex items-center justify-center">
+                        {expenseChartData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RePieChart>
+                              <Pie
+                                data={expenseChartData}
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={60}
+                                outerRadius={100}
+                                paddingAngle={5}
+                                dataKey="value"
+                              >
+                                {expenseChartData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={['#0038A8', '#CE1126', '#FCD116', '#007A33', '#6A2C91', '#FF6321'][index % 6]} />
+                                ))}
+                              </Pie>
+                              <ReTooltip 
+                                contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                formatter={(value: number) => `₱${value.toLocaleString()}`}
+                              />
+                              <Legend verticalAlign="bottom" height={36}/>
+                            </RePieChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="text-center">
+                            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <PieChart size={32} className="text-gray-200" />
+                            </div>
+                            <p className="text-xs lg:text-sm font-black text-gray-400 uppercase tracking-widest">No expense data yet</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div id="collection-line-chart" className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+                      <div className="flex items-center gap-4 mb-8">
+                        <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8]">
+                          <TrendingUp size={24} />
+                        </div>
+                        <div>
+                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Collection Trends</h3>
+                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Monthly remitted collections</p>
+                        </div>
+                      </div>
+                      <div className="h-[300px] w-full flex items-center justify-center">
+                        {collectionTrendData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={collectionTrendData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                              <XAxis 
+                                dataKey="name" 
+                                axisLine={false} 
+                                tickLine={false} 
+                                tick={{ fontSize: 10, fontWeight: 700, fill: '#94a3b8' }}
+                                dy={10}
+                              />
+                              <YAxis 
+                                axisLine={false} 
+                                tickLine={false} 
+                                tick={{ fontSize: 10, fontWeight: 700, fill: '#94a3b8' }}
+                                tickFormatter={(value) => `₱${value.toLocaleString()}`}
+                              />
+                              <ReTooltip 
+                                contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                formatter={(value: number) => `₱${value.toLocaleString()}`}
+                              />
+                              <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }} />
+                              <Bar dataKey="monthly" name="Monthly" fill="#0038A8" radius={[4, 4, 0, 0]} barSize={20} />
+                              <Line 
+                                type="monotone" 
+                                dataKey="cumulative" 
+                                name="Cumulative"
+                                stroke="#CE1126" 
+                                strokeWidth={3} 
+                                dot={{ r: 4, fill: '#CE1126', strokeWidth: 2, stroke: '#fff' }}
+                                activeDot={{ r: 6, strokeWidth: 0 }}
+                              />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="text-center">
+                            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                              <TrendingUp size={32} className="text-gray-200" />
+                            </div>
+                            <p className="text-xs lg:text-sm font-black text-gray-400 uppercase tracking-widest">No collection trends yet</p>
+                            <p className="text-[9px] lg:text-[10px] text-gray-300 font-bold uppercase mt-1">Verified remittances will appear here</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -3038,11 +4717,11 @@ function AppContent() {
                             <History size={24} />
                           </div>
                           <div>
-                            <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight">Recent Activity</h3>
-                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Latest system updates</p>
+                            <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Recent Activity</h3>
+                            <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Latest system updates</p>
                           </div>
                         </div>
-                        <button onClick={() => setActiveTab('audit')} className="text-[10px] font-black text-[#0038A8] uppercase tracking-widest hover:underline">View All</button>
+                        <button onClick={() => setActiveTab('audit')} className="text-[10px] lg:text-xs font-black text-[#0038A8] uppercase tracking-widest hover:underline">View All</button>
                       </div>
                       
                       <div className="space-y-4">
@@ -3052,10 +4731,10 @@ function AppContent() {
                               log.type === 'critical' ? 'bg-red-500' : log.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
                             }`} />
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-black text-gray-900 uppercase tracking-tight mb-1">{log.action}</p>
-                              <p className="text-[11px] text-gray-500 font-medium line-clamp-1">{log.details}</p>
+                              <p className="text-xs lg:text-sm font-black text-gray-900 uppercase tracking-tight mb-1">{log.action}</p>
+                              <p className="text-[11px] lg:text-xs text-gray-500 font-medium line-clamp-1">{log.details}</p>
                             </div>
-                            <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest whitespace-nowrap">
+                            <div className="text-[9px] lg:text-[10px] text-gray-400 font-bold uppercase tracking-widest whitespace-nowrap">
                               {log.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </div>
                           </div>
@@ -3070,8 +4749,8 @@ function AppContent() {
                           <Clock size={24} />
                         </div>
                         <div>
-                          <h3 className="text-lg font-black text-gray-900 uppercase tracking-tight">Pending Tasks</h3>
-                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Awaiting action</p>
+                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Pending Tasks</h3>
+                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Awaiting action</p>
                         </div>
                       </div>
 
@@ -3080,10 +4759,10 @@ function AppContent() {
                           remittances.filter(r => r.status === 'pending').slice(0, 4).map(rem => (
                             <div key={rem.id} className="p-4 rounded-2xl bg-yellow-50/50 border border-yellow-100">
                               <div className="flex justify-between items-start mb-2">
-                                <span className="text-[10px] font-black text-yellow-700 uppercase tracking-widest">{rem.gradeLevel} Remittance</span>
-                                <span className="text-[10px] font-black text-yellow-600">₱{rem.amount.toLocaleString()}</span>
+                                <span className="text-[10px] lg:text-xs font-black text-yellow-700 uppercase tracking-widest">{rem.gradeLevel} Remittance</span>
+                                <span className="text-[10px] lg:text-xs font-black text-yellow-600">₱{rem.amount.toLocaleString()}</span>
                               </div>
-                              <p className="text-[11px] text-gray-600 font-bold mb-3">From: {rem.bodName}</p>
+                              <p className="text-[11px] lg:text-xs text-gray-600 font-bold mb-3">From: {rem.bodName}</p>
                               <button 
                                 onClick={() => setActiveTab('remittance')}
                                 className="w-full py-2 bg-white text-yellow-700 rounded-xl text-[10px] font-black uppercase tracking-widest border border-yellow-200 hover:bg-yellow-100 transition-all"
@@ -3116,8 +4795,8 @@ function AppContent() {
                     <Users className="text-[#0038A8] group-hover:text-white transition-colors" size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Total Faculty</p>
-                    <h3 className="text-2xl font-black text-gray-900 leading-none">{filteredRecords.length}</h3>
+                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Total Faculty</p>
+                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">{filteredRecords.length}</h3>
                   </div>
                 </div>
                 <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
@@ -3131,8 +4810,8 @@ function AppContent() {
                     <CheckCircle className="text-green-600 group-hover:text-white transition-colors" size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Fully Paid</p>
-                    <h3 className="text-2xl font-black text-gray-900 leading-none">
+                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Fully Paid</p>
+                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
                       {filteredRecords.filter(r => {
                         const requiredDues = standardDues.filter(d => !d.isVoluntary);
                         return requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
@@ -3156,8 +4835,8 @@ function AppContent() {
                     <Clock className="text-yellow-600 group-hover:text-white transition-colors" size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Partial</p>
-                    <h3 className="text-2xl font-black text-gray-900 leading-none">
+                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Partial</p>
+                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
                       {filteredRecords.filter(r => {
                         const requiredDues = standardDues.filter(d => !d.isVoluntary);
                         const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
@@ -3185,8 +4864,8 @@ function AppContent() {
                     <AlertCircle className="text-red-600 group-hover:text-white transition-colors" size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Pending</p>
-                    <h3 className="text-2xl font-black text-gray-900 leading-none">
+                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Pending</p>
+                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
                       {filteredRecords.filter(r => r.paidDueIds.length === 0).length}
                     </h3>
                   </div>
@@ -3205,8 +4884,8 @@ function AppContent() {
                 <div className="flex items-center gap-3">
                   <ShieldAlert className="text-red-500" size={24} />
                   <div>
-                    <h3 className="text-xs font-black text-red-800 uppercase tracking-wider">Pending Deletion Requests</h3>
-                    <p className="text-[10px] text-red-600 font-bold uppercase tracking-widest">
+                    <h3 className="text-xs lg:text-sm font-black text-red-800 uppercase tracking-wider">Pending Deletion Requests</h3>
+                    <p className="text-[10px] lg:text-xs text-red-600 font-bold uppercase tracking-widest">
                       BODs have marked items for deletion. Action required.
                     </p>
                   </div>
@@ -3220,18 +4899,18 @@ function AppContent() {
               <div className="flex items-center gap-4 mb-8 relative z-10">
                 <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black shadow-lg shadow-blue-200">1</div>
                 <div>
-                  <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Standard Dues Template</h2>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Define what everyone needs to pay</p>
+                  <h2 className="text-xl lg:text-2xl font-black text-gray-900 uppercase tracking-tight">Standard Dues Template</h2>
+                  <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Define what everyone needs to pay</p>
                 </div>
               </div>
               
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
                 <div className="lg:col-span-4">
                   <form onSubmit={handleAddStandardDue} className="bg-gray-50/50 p-6 rounded-3xl border border-gray-100 space-y-4">
-                    <h3 className="text-xs font-black text-gray-400 mb-2 uppercase tracking-widest">Add New Item</h3>
+                    <h3 className="text-xs lg:text-sm font-black text-gray-400 mb-2 uppercase tracking-widest">Add New Item</h3>
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Item Name</label>
+                        <label className="block text-[10px] lg:text-xs font-black text-gray-500 mb-1.5 uppercase tracking-widest">Item Name</label>
                         <input 
                           type="text" 
                           required 
@@ -3421,6 +5100,13 @@ function AppContent() {
                       <input type="text" value={middleInitial} onChange={e => setMiddleInitial(e.target.value)} placeholder="P." className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
                     </div>
                     <div>
+                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Gender</label>
+                      <select value={gender} onChange={e => setGender(e.target.value as 'Male' | 'Female')} className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]">
+                        <option value="Female">Female</option>
+                        <option value="Male">Male</option>
+                      </select>
+                    </div>
+                    <div>
                       <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Grade Level</label>
                       <select value={gradeLevel} onChange={e => setGradeLevel(e.target.value as GradeLevel)} className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]">
                         <option value="Grade 7">Grade 7</option>
@@ -3599,7 +5285,6 @@ function AppContent() {
                           <>
                             <tr><td colSpan={4} className="px-6 py-2 text-xs text-gray-500">Showing {paginatedRecords.length} teachers of {filteredRecords.length}</td></tr>
                             {paginatedRecords.map(record => {
-                              const totalCollectibles = standardDues.filter(d => !d.isVoluntary).reduce((sum, d) => sum + d.amount, 0);
                               const totalPaid = standardDues
                                 .filter(d => record.paidDueIds.includes(d.id))
                                 .reduce((sum, d) => {
@@ -3608,7 +5293,9 @@ function AppContent() {
                                   }
                                   return sum + d.amount;
                                 }, 0);
-                              const requiredDues = standardDues.filter(d => !d.isVoluntary);
+                              const currentBalance = standardDues
+                                .filter(d => !record.paidDueIds.includes(d.id))
+                                .reduce((sum, d) => sum + d.amount, 0);
                               const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
                               const isExpanded = expandedRows.has(record.id);
 
@@ -3660,6 +5347,20 @@ function AppContent() {
                                 <td className="px-6 py-4 text-right">
                                   <div className="flex items-center justify-end gap-2">
                                     <button 
+                                      onClick={() => handleSendReminder(record)}
+                                      disabled={isSendingReminder === record.id || record.pendingDeletion || isFullyPaid}
+                                      className={`p-2 rounded-xl transition-all ${
+                                        (isFullyPaid || record.pendingDeletion)
+                                        ? 'text-gray-200 cursor-not-allowed' 
+                                        : isSendingReminder === record.id
+                                        ? 'text-gray-400'
+                                        : 'text-orange-500 hover:bg-orange-50'
+                                      }`}
+                                      title="Send Payment Reminder"
+                                    >
+                                      {isSendingReminder === record.id ? <Loader2 size={16} className="animate-spin" /> : <MailWarning size={16} />}
+                                    </button>
+                                    <button 
                                       onClick={() => handleSendReceipt(record)}
                                       disabled={totalPaid === 0 || isSending === record.id || record.pendingDeletion}
                                       className={`p-2 rounded-xl transition-all ${
@@ -3700,6 +5401,35 @@ function AppContent() {
                               {isExpanded && (
                                 <tr className="bg-blue-50/20">
                                   <td colSpan={4} className="px-14 py-6">
+                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-6 p-6 bg-white rounded-[2rem] border border-gray-100 shadow-sm">
+                                      <div className="flex items-center gap-6">
+                                        <div className="bg-orange-50 p-4 rounded-2xl text-orange-600">
+                                          <PhilippinePeso size={24} />
+                                        </div>
+                                        <div>
+                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Current Balance</p>
+                                          <h4 className="text-2xl font-black text-gray-900 tracking-tight">₱{currentBalance.toFixed(2)}</h4>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        <button 
+                                          onClick={() => handleSendReminder(record)}
+                                          disabled={isSendingReminder === record.id || record.pendingDeletion || currentBalance <= 0}
+                                          className="flex items-center gap-2 px-6 py-3 bg-orange-500 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-orange-600 transition-all shadow-lg shadow-orange-200 disabled:opacity-50"
+                                        >
+                                          {isSendingReminder === record.id ? <Loader2 size={14} className="animate-spin" /> : <MailWarning size={14} />}
+                                          Send Reminder
+                                        </button>
+                                        <button 
+                                          onClick={() => handleSendReceipt(record)}
+                                          disabled={totalPaid === 0 || isSending === record.id || record.pendingDeletion}
+                                          className="flex items-center gap-2 px-6 py-3 bg-[#CE1126] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50"
+                                        >
+                                          {isSending === record.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                                          Send Receipt
+                                        </button>
+                                      </div>
+                                    </div>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                                       {standardDues.map(due => {
                                         const isPaid = record.paidDueIds.includes(due.id);
@@ -3709,7 +5439,7 @@ function AppContent() {
                                               <input 
                                                 type="checkbox" 
                                                 checked={isPaid}
-                                                onChange={() => toggleDuePaid(record.id, due.id)}
+                                                onChange={() => handleTogglePayment(record.id, due.id)}
                                                 className="w-4 h-4 text-[#0038A8] border-gray-300 rounded-lg focus:ring-[#0038A8]"
                                               />
                                               <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${isPaid ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-300'}`}>
@@ -3717,7 +5447,12 @@ function AppContent() {
                                               </div>
                                               <div>
                                                 <div className="text-[10px] font-black text-gray-900 uppercase tracking-tight">{due.name}</div>
-                                                <div className="text-[9px] text-gray-400 font-bold">₱{due.amount.toFixed(2)}</div>
+                                                <div className="text-[9px] text-gray-400 font-bold">
+                                                  {due.isVoluntary && isPaid 
+                                                    ? `₱${(record.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
+                                                    : `₱${due.amount.toFixed(2)}`
+                                                  }
+                                                </div>
                                               </div>
                                             </div>
                                             {isPaid && <span className="text-[8px] font-black text-green-600 uppercase tracking-widest bg-green-50 px-2 py-0.5 rounded-full">Paid</span>}
@@ -3757,7 +5492,6 @@ function AppContent() {
                     ) : (
                       <>
                         {paginatedRecords.map(record => {
-                          const totalCollectibles = standardDues.filter(d => !d.isVoluntary).reduce((sum, d) => sum + d.amount, 0);
                           const totalPaid = standardDues
                             .filter(d => record.paidDueIds.includes(d.id))
                             .reduce((sum, d) => {
@@ -3766,7 +5500,9 @@ function AppContent() {
                               }
                               return sum + d.amount;
                             }, 0);
-                          const requiredDues = standardDues.filter(d => !d.isVoluntary);
+                          const currentBalance = standardDues
+                            .filter(d => !record.paidDueIds.includes(d.id))
+                            .reduce((sum, d) => sum + d.amount, 0);
                           const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
                           const isExpanded = expandedRows.has(record.id);
 
@@ -3815,6 +5551,20 @@ function AppContent() {
                                 
                                 <div className="flex items-center gap-1 shrink-0">
                                   <button 
+                                    onClick={() => handleSendReminder(record)}
+                                    disabled={isSendingReminder === record.id || record.pendingDeletion || currentBalance <= 0}
+                                    className={`p-1.5 rounded-lg transition-all ${
+                                      (currentBalance <= 0 || record.pendingDeletion)
+                                      ? 'text-gray-200' 
+                                      : isSendingReminder === record.id
+                                      ? 'text-gray-400'
+                                      : 'text-orange-500 bg-orange-50'
+                                    }`}
+                                    title="Send Payment Reminder"
+                                  >
+                                    {isSendingReminder === record.id ? <Loader2 size={12} className="animate-spin" /> : <MailWarning size={12} />}
+                                  </button>
+                                  <button 
                                     onClick={() => handleSendReceipt(record)}
                                     disabled={totalPaid === 0 || isSending === record.id || record.pendingDeletion}
                                     className={`p-1.5 rounded-lg transition-all ${
@@ -3834,6 +5584,13 @@ function AppContent() {
                                     <FileText size={12} />
                                   </button>
                                   <button 
+                                    onClick={() => generateTeacherQRCode(record.email, record.gradeLevel, record.name)}
+                                    className="p-1.5 text-purple-600 bg-purple-50 rounded-lg transition-all"
+                                    title="Generate QR Code"
+                                  >
+                                    <QrCode size={12} />
+                                  </button>
+                                  <button 
                                     onClick={() => deleteTeacher(record.id)}
                                     className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
                                   >
@@ -3843,8 +5600,23 @@ function AppContent() {
                               </div>
 
                               {isExpanded && (
-                                <div className="pt-2 border-t border-gray-50 space-y-1.5">
-                                  {standardDues.map(due => {
+                                <div className="pt-2 border-t border-gray-50 space-y-3">
+                                  <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex items-center justify-between">
+                                    <div>
+                                      <p className="text-[8px] font-black text-orange-400 uppercase tracking-widest leading-none mb-1">Balance</p>
+                                      <h4 className="text-sm font-black text-orange-700 leading-none">₱{currentBalance.toFixed(2)}</h4>
+                                    </div>
+                                    <button 
+                                      onClick={() => handleSendReminder(record)}
+                                      disabled={isSendingReminder === record.id || record.pendingDeletion || currentBalance <= 0}
+                                      className="px-3 py-1.5 bg-orange-500 text-white rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-orange-600 transition-all disabled:opacity-50 flex items-center gap-1.5"
+                                    >
+                                      {isSendingReminder === record.id ? <Loader2 size={10} className="animate-spin" /> : <MailWarning size={10} />}
+                                      Remind
+                                    </button>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {standardDues.map(due => {
                                     const isPaid = record.paidDueIds.includes(due.id);
                                     return (
                                     <label key={due.id} className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer ${isPaid ? 'bg-green-50/30 border-green-100' : 'bg-gray-50/50 border-gray-100'}`}>
@@ -3852,7 +5624,7 @@ function AppContent() {
                                         <input 
                                           type="checkbox" 
                                           checked={isPaid}
-                                          onChange={() => toggleDuePaid(record.id, due.id)}
+                                          onChange={() => handleTogglePayment(record.id, due.id)}
                                           className="w-3 h-3 text-[#0038A8] border-gray-300 rounded focus:ring-[#0038A8]"
                                         />
                                         <div className={`w-4 h-4 rounded-md flex items-center justify-center ${isPaid ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-400'}`}>
@@ -3860,7 +5632,12 @@ function AppContent() {
                                         </div>
                                         <div>
                                           <div className="text-[9px] font-black text-gray-900 uppercase tracking-tight">{due.name}</div>
-                                          <div className="text-[8px] text-gray-500 font-bold">₱{due.amount.toFixed(2)}</div>
+                                          <div className="text-[8px] text-gray-500 font-bold">
+                                            {due.isVoluntary && isPaid 
+                                              ? `₱${(record.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
+                                              : `₱${due.amount.toFixed(2)}`
+                                            }
+                                          </div>
                                         </div>
                                       </div>
                                       {isPaid && <span className="text-[7px] font-black text-green-600 uppercase tracking-widest bg-green-100 px-1.5 py-0.5 rounded-full">Paid</span>}
@@ -3868,7 +5645,8 @@ function AppContent() {
                                     );
                                   })}
                                 </div>
-                              )}
+                              </div>
+                            )}
                             </div>
                           );
                         })}
@@ -4020,6 +5798,129 @@ function AppContent() {
           </div>
         )}
 
+        {activeTab === 'settings' && profile.role === 'admin' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-[#0038A8]">
+                    <Settings size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Report Configuration</h2>
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-1">Manage signatories and report settings</p>
+                  </div>
+                </div>
+                <div className="flex gap-3 w-full sm:w-auto">
+                  <button 
+                    onClick={() => {
+                      const newSig: Signatory = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        label: 'New Signatory:',
+                        name: '',
+                        title: ''
+                      };
+                      setSignatories([...signatories, newSig]);
+                    }}
+                    className="flex-1 sm:flex-none bg-blue-50 text-[#0038A8] px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-100 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Plus size={16} /> Add Signatory
+                  </button>
+                  <button 
+                    onClick={() => updateSignatories(signatories)}
+                    className="flex-1 sm:flex-none bg-[#0038A8] text-white px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                  >
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {signatories.map((sig, index) => (
+                  <div key={sig.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 space-y-4 relative group">
+                    <button 
+                      onClick={() => {
+                        const newList = signatories.filter((_, i) => i !== index);
+                        setSignatories(newList);
+                      }}
+                      className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                      title="Remove Signatory"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-black text-[#0038A8] uppercase tracking-widest mb-2">Label (e.g., Prepared by:)</label>
+                        <input 
+                          type="text" 
+                          value={sig.label}
+                          onChange={(e) => {
+                            const newList = [...signatories];
+                            newList[index].label = e.target.value;
+                            setSignatories(newList);
+                          }}
+                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Full Name</label>
+                        <input 
+                          type="text" 
+                          value={sig.name}
+                          onChange={(e) => {
+                            const newList = [...signatories];
+                            newList[index].name = e.target.value;
+                            setSignatories(newList);
+                          }}
+                          placeholder="Enter name"
+                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Title / Position</label>
+                        <input 
+                          type="text" 
+                          value={sig.title}
+                          onChange={(e) => {
+                            const newList = [...signatories];
+                            newList[index].title = e.target.value;
+                            setSignatories(newList);
+                          }}
+                          placeholder="Enter title"
+                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                
+                {signatories.length === 0 && (
+                  <div className="col-span-full py-20 text-center bg-gray-50 rounded-[2.5rem] border border-dashed border-gray-200">
+                    <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                      <Settings size={32} className="text-gray-300" />
+                    </div>
+                    <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">No signatories configured.</p>
+                    <button 
+                      onClick={() => {
+                        const newSig: Signatory = {
+                          id: Math.random().toString(36).substr(2, 9),
+                          label: 'Prepared by:',
+                          name: '',
+                          title: ''
+                        };
+                        setSignatories([...signatories, newSig]);
+                      }}
+                      className="mt-4 text-[#0038A8] text-xs font-black uppercase tracking-widest hover:underline"
+                    >
+                      Add your first signatory
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {activeTab === 'audit' && profile.role === 'admin' && (
           <div className="space-y-6 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
@@ -4175,7 +6076,7 @@ function AppContent() {
                       <th className="pb-4">Grade</th>
                       <th className="pb-4">Amount (₱)</th>
                       <th className="pb-4">Status</th>
-                      {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && <th className="pb-4 text-right pr-4">Action</th>}
+                      {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile.email === 'ngehthong@gmail.com') && <th className="pb-4 text-right pr-4">Action</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -4194,7 +6095,7 @@ function AppContent() {
                             {rem.status}
                           </span>
                         </td>
-                         {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
+                         {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile.email === 'ngehthong@gmail.com') && (
                           <td className="py-4 text-right pr-4 flex items-center justify-end gap-3">
                             {rem.status === 'pending' ? (
                               <button 
@@ -4255,7 +6156,7 @@ function AppContent() {
                       <span className="text-gray-500 text-xs">{rem.timestamp?.toDate().toLocaleDateString()}</span>
                       <span className="font-black text-[#0038A8]">₱{rem.amount.toFixed(2)}</span>
                     </div>
-                    {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com') && (
+                    {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile.email === 'ngehthong@gmail.com') && (
                       <div className="pt-3 border-t border-gray-50 flex justify-end gap-3">
                         {rem.status === 'pending' ? (
                           <button 
@@ -4316,7 +6217,19 @@ function AppContent() {
                 <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
                   <Shield size={20} />
                 </div>
-                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest text-center">System Logs</span>
+                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest text-center">Audit Logs</span>
+              </button>
+              <button onClick={() => setActiveTab('settings')} className="bg-white p-4 rounded-[2rem] border border-gray-100 hover:border-blue-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group">
+                <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
+                  <Settings size={20} />
+                </div>
+                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest text-center">Report Settings</span>
+              </button>
+              <button onClick={() => setActiveTab('system')} className="bg-white p-4 rounded-[2rem] border border-gray-100 hover:border-purple-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group">
+                <div className="w-10 h-10 bg-purple-50 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
+                  <Shield size={20} />
+                </div>
+                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest text-center">System Control</span>
               </button>
               <button onClick={handleDownloadComprehensiveReportDocx} className="bg-white p-4 rounded-[2rem] border border-gray-100 hover:border-green-200 hover:shadow-md transition-all flex flex-col items-center gap-3 group">
                 <div className="w-10 h-10 bg-green-50 rounded-xl flex items-center justify-center text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
@@ -4327,6 +6240,38 @@ function AppContent() {
             </div>
 
             {/* Stats Overview */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+              {/* ... existing grade stats ... */}
+            </div>
+
+            {/* Initial Balance Management */}
+            <div className="bg-white p-8 rounded-[2rem] border border-gray-100 shadow-sm">
+              <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-6">Manage Initial Balance</h3>
+              <div className="flex flex-col md:flex-row gap-4">
+                <input 
+                  type="number" 
+                  placeholder="Amount (₱)" 
+                  value={newBalanceAmount}
+                  onChange={(e) => setNewBalanceAmount(e.target.value)}
+                  className="flex-1 px-6 py-4 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-blue-100 outline-none font-bold"
+                />
+                <input 
+                  type="text" 
+                  placeholder="Description (e.g., Carry-over from 2025)" 
+                  value={newBalanceDescription}
+                  onChange={(e) => setNewBalanceDescription(e.target.value)}
+                  className="flex-1 px-6 py-4 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-blue-100 outline-none font-bold"
+                />
+                <button 
+                  onClick={handleAddInitialBalance}
+                  className="bg-[#0038A8] text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg"
+                >
+                  Add Balance
+                </button>
+              </div>
+            </div>
+
+            {/* Existing Stats Overview */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
               {['Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'].map(grade => {
                 const gradeTeachers = records.filter(r => r.gradeLevel === grade);
@@ -4376,6 +6321,9 @@ function AppContent() {
                     </div>
                   </div>
                   <div className="flex gap-2 w-full sm:w-auto">
+                    <button onClick={handleDownloadTermsDocx} className="flex-1 sm:flex-none p-3 bg-purple-50 text-purple-600 rounded-2xl hover:bg-purple-100 transition-all flex items-center justify-center gap-2" title="Terms Agreement Report">
+                      <ShieldCheck size={18} /> <span className="sm:hidden text-xs font-bold">Terms</span>
+                    </button>
                     <button onClick={handleDownloadExcel} className="flex-1 sm:flex-none p-3 bg-green-50 text-green-600 rounded-2xl hover:bg-green-100 transition-all flex items-center justify-center gap-2" title="Excel Report">
                       <FileText size={18} /> <span className="sm:hidden text-xs font-bold">Excel</span>
                     </button>
@@ -4426,26 +6374,14 @@ function AppContent() {
                   
                   <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60 mb-2">Net Club Balance</div>
                   <div className="text-5xl font-black mb-10 tracking-tighter">
-                    ₱{(records.reduce((sum, r) => {
-                      const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
-                      return sum + paidDues.reduce((s, d) => {
-                        if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
-                        return s + d.amount;
-                      }, 0);
-                    }, 0) - expenses.reduce((sum, e) => sum + e.amount, 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    ₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </div>
                 </div>
                 
                 <div className="relative z-10 space-y-4 pt-8 border-t border-white/10">
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold opacity-60 uppercase tracking-widest">Total Collections</span>
-                    <span className="text-sm font-black">₱{records.reduce((sum, r) => {
-                      const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
-                      return sum + paidDues.reduce((s, d) => {
-                        if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
-                        return s + d.amount;
-                      }, 0);
-                    }, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <span className="text-sm font-black">₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold opacity-60 uppercase tracking-widest">Total Expenses</span>
@@ -4454,7 +6390,11 @@ function AppContent() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
 
+        {activeTab === 'system' && profile.role === 'admin' && (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               {/* User Management Section */}
               <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
@@ -4480,7 +6420,173 @@ function AppContent() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                  {/* Email System Status */}
+                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
+                          <Mail size={16} />
+                        </div>
+                        <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Email System</h3>
+                      </div>
+                      {emailStatus && (
+                        <div className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest ${emailStatus.configured ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                          {emailStatus.configured ? 'Configured' : 'Missing Config'}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-4">
+                      {emailStatus ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-[9px] font-bold">
+                            <span className="text-gray-400 uppercase tracking-widest">User:</span>
+                            <span className="text-gray-700 truncate max-w-[120px]">{emailStatus.gmailUser || 'Not Set'}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-[9px] font-bold">
+                            <span className="text-gray-400 uppercase tracking-widest">App Password:</span>
+                            <span className={emailStatus.hasAppPassword ? 'text-green-600' : 'text-red-600'}>
+                              {emailStatus.hasAppPassword ? 'DETECTED' : 'MISSING'}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
+                          Verify that your Gmail SMTP settings are correct.
+                        </p>
+                      )}
+                      <button
+                        onClick={testEmailSystem}
+                        disabled={isTestingEmail}
+                        className="w-full py-3 px-4 bg-white text-[#0038A8] rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-50 transition-all border border-blue-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isTestingEmail ? <Loader2 className="animate-spin" size={14} /> : <Send size={14} />}
+                        Test Email
+                      </button>
+
+                      {emailStatus?.logs && emailStatus.logs.length > 0 && (
+                        <div className="mt-6 pt-6 border-t border-gray-100">
+                          <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-3">Recent OTP Logs</p>
+                          <div className="space-y-2 max-h-[150px] overflow-y-auto custom-scrollbar pr-2">
+                            {emailStatus.logs.map((log, idx) => (
+                              <div key={idx} className={`p-2 bg-white rounded-lg border ${log.type === 'qr' ? 'border-blue-100 bg-blue-50/30' : 'border-gray-50'} flex flex-col gap-1`}>
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`w-1.5 h-1.5 rounded-full ${log.type === 'qr' ? 'bg-blue-500' : 'bg-purple-500'}`}></span>
+                                    <span className="text-[8px] font-black text-gray-900 truncate max-w-[100px]">{log.email}</span>
+                                  </div>
+                                  <span className={`text-[8px] font-black uppercase ${log.success ? 'text-green-600' : 'text-red-600'}`}>
+                                    {log.success ? 'SENT' : 'FAIL'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[8px] font-bold text-gray-400">
+                                    {log.type === 'qr' ? 'QR CODE' : 'OTP CODE'} • {new Date(log.timestamp).toLocaleTimeString()}
+                                  </span>
+                                  <span className="text-[8px] font-black text-[#0038A8]">
+                                    {log.type === 'qr' ? 'GENERATED' : `Code: ${log.code}`}
+                                  </span>
+                                </div>
+                                {log.error && log.error !== 'Simulated' && (
+                                  <p className="text-[7px] text-red-400 font-bold leading-tight mt-1">{log.error}</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
+                        <Lock size={16} />
+                      </div>
+                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Manual OTP</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
+                        Generate a code manually if a teacher isn't receiving emails.
+                      </p>
+                      <input 
+                        id="manual-otp-email"
+                        type="email" 
+                        placeholder="Teacher's Email"
+                        className="w-full p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                      />
+                      <button 
+                        onClick={async () => {
+                          const email = (document.getElementById('manual-otp-email') as HTMLInputElement).value;
+                          if (!email) return showToast("Please enter an email");
+                          const code = Math.floor(100000 + Math.random() * 900000).toString();
+                          try {
+                            await fetch('/api/send-verification-code', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ email, code, manual: true })
+                            });
+                            showToast(`Manual Code for ${email}: ${code}`);
+                            checkEmailStatus();
+                          } catch (e) {
+                            showToast("Failed to log manual code");
+                          }
+                        }}
+                        className="w-full bg-purple-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-purple-700 transition-all shadow-lg shadow-purple-200"
+                      >
+                        Generate Manual Code
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-8 h-8 bg-green-100 rounded-xl flex items-center justify-center text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
+                        <QrCode size={16} />
+                      </div>
+                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Manual Teacher QR</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
+                        Generate a QR code for a teacher manually.
+                      </p>
+                      <input 
+                        id="manual-teacher-email"
+                        type="email" 
+                        placeholder="Teacher's Email"
+                        className="w-full p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-green-500 transition-all"
+                      />
+                      <button 
+                        onClick={async () => {
+                          const emailInput = document.getElementById('manual-teacher-email') as HTMLInputElement;
+                          const email = emailInput.value;
+                          if (!email) return showToast("Please enter an email");
+                          
+                          setLoading(true);
+                          try {
+                            const q = query(collection(db, 'teachers'), where('email', '==', email));
+                            const snapshot = await getDocs(q);
+                            if (snapshot.empty) {
+                              showToast("No teacher record found with this email.");
+                              return;
+                            }
+                            const teacher = snapshot.docs[0].data();
+                            await generateTeacherQRCode(teacher.email, teacher.gradeLevel, teacher.name);
+                            showToast("QR Code generated and sent to teacher's email.");
+                            emailInput.value = '';
+                          } catch (e) {
+                            showToast("Failed to generate QR code");
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                        className="w-full bg-green-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-200"
+                      >
+                        Generate & Email QR
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
                     <div className="flex items-center gap-3 mb-6">
                       <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
@@ -4512,6 +6618,39 @@ function AppContent() {
                         className="w-full bg-[#0038A8] text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
                       >
                         Generate BOD QR Code
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
+                        <QrCode size={16} />
+                      </div>
+                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Teacher QR Generator</h3>
+                    </div>
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 gap-3">
+                        <select 
+                          id="new-teacher-qr-select" 
+                          className="p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                        >
+                          <option value="">Select a Teacher...</option>
+                          {records.sort((a, b) => a.name.localeCompare(b.name)).map(r => (
+                            <option key={r.id} value={r.id}>{r.name} ({r.gradeLevel})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          const teacherId = (document.getElementById('new-teacher-qr-select') as HTMLSelectElement).value;
+                          const teacher = records.find(r => r.id === teacherId);
+                          if (teacher) generateTeacherQRCode(teacher.email, teacher.gradeLevel, teacher.name);
+                          else showToast("Please select a teacher first.");
+                        }}
+                        className="w-full bg-purple-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-purple-700 transition-all shadow-lg shadow-purple-200"
+                      >
+                        Generate Teacher QR Code
                       </button>
                     </div>
                   </div>
@@ -4590,7 +6729,16 @@ function AppContent() {
                                     <QrCode size={16} />
                                   </button>
                                 )}
-                                {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && (
+                                {u.role === 'teacher' && (
+                                  <button 
+                                    onClick={() => generateTeacherQRCode(u.email, u.gradeLevel, u.name)}
+                                    className="p-2 text-green-500 hover:text-white hover:bg-green-600 transition-all bg-green-50 rounded-xl"
+                                    title="Generate Teacher QR Login Code"
+                                  >
+                                    <QrCode size={16} />
+                                  </button>
+                                )}
+                                {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
                                   <button 
                                     onClick={() => deleteUser(u.uid)}
                                     className="p-2 text-gray-400 hover:text-white hover:bg-red-500 transition-all bg-gray-100 rounded-xl"
@@ -4672,7 +6820,7 @@ function AppContent() {
                               <QrCode size={16} />
                             </button>
                           )}
-                          {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && (
+                          {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
                             <button 
                               onClick={() => deleteUser(u.uid)}
                               className="p-2 text-gray-400 hover:text-white hover:bg-red-500 transition-all bg-gray-100 rounded-xl"
@@ -4727,6 +6875,12 @@ function AppContent() {
                   </div>
                 </div>
                   <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+                    <button 
+                      onClick={() => setShowArchiveModal(true)}
+                      className="w-full sm:w-auto bg-blue-50 text-blue-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 group"
+                    >
+                      <Archive size={16} className="group-hover:scale-110 transition-transform" /> Close School Year
+                    </button>
                     <button 
                       onClick={clearAuditLogs}
                       className="w-full sm:w-auto bg-orange-50 text-orange-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-orange-100 hover:bg-orange-600 hover:text-white transition-all flex items-center justify-center gap-2 group"
@@ -4823,7 +6977,7 @@ function AppContent() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Middle Initial</label>
                     <input 
@@ -4832,6 +6986,17 @@ function AppContent() {
                       onChange={e => setEditMiddleInitial(e.target.value)} 
                       className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
                     />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Gender</label>
+                    <select 
+                      value={editGender}
+                      onChange={e => setEditGender(e.target.value as 'Male' | 'Female')}
+                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm appearance-none"
+                    >
+                      <option value="Female">Female</option>
+                      <option value="Male">Male</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Grade Level</label>
@@ -4891,6 +7056,60 @@ function AppContent() {
         </div>
       )}
 
+      {/* Voluntary Payment Modal */}
+      {isVoluntaryModalOpen && voluntaryPaymentData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative overflow-hidden"
+          >
+            <div className="absolute top-0 left-0 w-full h-2 bg-[#0038A8]"></div>
+            <div className="flex justify-center mb-6">
+              <div className="bg-blue-50 p-4 rounded-full">
+                <PhilippinePeso className="text-[#0038A8]" size={32} />
+              </div>
+            </div>
+            <h2 className="text-xl font-black text-center text-gray-900 mb-2">Voluntary Payment</h2>
+            <p className="text-center text-gray-500 text-sm mb-6 font-medium">
+              Enter the amount for <span className="text-[#0038A8] font-bold">{standardDues.find(d => d.id === voluntaryPaymentData.dueId)?.name}</span>
+            </p>
+            
+            <div className="space-y-4">
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-black">₱</span>
+                <input 
+                  type="number" 
+                  autoFocus
+                  placeholder="0.00"
+                  value={voluntaryPaymentData.amount}
+                  onChange={e => setVoluntaryPaymentData({ ...voluntaryPaymentData, amount: e.target.value })}
+                  className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl pl-10 pr-4 py-4 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-black text-gray-900 text-xl"
+                />
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    setIsVoluntaryModalOpen(false);
+                    setVoluntaryPaymentData(null);
+                  }}
+                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={submitVoluntaryPayment}
+                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                >
+                  Confirm
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
       {/* Delete Remittance Password Modal */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
@@ -4901,58 +7120,34 @@ function AppContent() {
           >
             <div className="flex items-center gap-4 mb-6">
               <div className="bg-red-100 p-3 rounded-2xl">
-                <ShieldAlert className="text-red-600" size={28} />
+                <AlertTriangle className="text-red-600" size={28} />
               </div>
               <div>
-                <h3 className="text-xl font-black text-gray-900">Admin Authentication</h3>
-                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">Security Clearance Required</p>
+                <h3 className="text-xl font-black text-gray-900">Confirm Deletion</h3>
+                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">Action Required</p>
               </div>
             </div>
             
-            <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-              You are about to delete a remittance record. This action will reset the remittance status for associated teachers. Please enter the admin password to proceed.
+            <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+              Do you really want to delete this remittance record? This action will reset the remittance status for associated teachers and cannot be undone.
             </p>
             
-            <div className="space-y-4">
-              <div className="relative">
-                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <input 
-                  type={showDeletePassword ? "text" : "password"}
-                  placeholder="Enter Admin Password"
-                  value={deletePassword}
-                  onChange={(e) => setDeletePassword(e.target.value)}
-                  className="w-full pl-12 pr-12 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900"
-                  autoFocus
-                  onKeyDown={(e) => e.key === 'Enter' && deleteRemittance()}
-                />
-                <button 
-                  type="button"
-                  onClick={() => setShowDeletePassword(!showDeletePassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  {showDeletePassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              
-              <div className="flex gap-3 pt-2">
-                <button 
-                  onClick={() => {
-                    setIsDeleteModalOpen(false);
-                    setDeletePassword('');
-                    setShowDeletePassword(false);
-                    setRemittanceIdToDelete(null);
-                  }}
-                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={deleteRemittance}
-                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-700 transition-all shadow-lg shadow-red-200"
-                >
-                  Confirm Delete
-                </button>
-              </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setRemittanceIdToDelete(null);
+                }}
+                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={deleteRemittance}
+                className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-red-700 transition-all shadow-lg shadow-red-200"
+              >
+                Confirm Delete
+              </button>
             </div>
           </motion.div>
         </div>
@@ -4964,7 +7159,7 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100 text-center relative"
+            className="bg-white rounded-[2.5rem] p-6 sm:p-10 md:p-12 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-100 text-center relative"
           >
             <button 
               onClick={() => setQrCodeData(null)}
@@ -4974,35 +7169,41 @@ function AppContent() {
             </button>
             
             <div id="qr-code-capture-area-admin" className="bg-white p-4 rounded-2xl">
-              <h3 className="text-2xl font-black text-gray-900 mb-2">{qrCodeData.grade === 'Teacher' ? 'Teacher' : 'BOD'} Login QR Code</h3>
-              <p className="text-gray-500 font-bold mb-6 text-sm">
+              <h3 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">
+                {qrCodeData.grade.startsWith('Grade') ? 'Teacher' : 'BOD'} Login QR Code
+              </h3>
+              <p className="text-gray-500 font-bold mb-8 text-sm sm:text-base">
                 {qrCodeData.grade}
               </p>
               
-              <div className="bg-white p-4 rounded-2xl shadow-inner border border-gray-100 inline-block mb-4">
+              <div className="bg-white p-4 rounded-2xl border-2 border-blue-100 shadow-lg shadow-blue-50/50 mb-8 w-48 h-48 sm:w-64 sm:h-64 mx-auto flex items-center justify-center">
                 <QRCodeCanvas 
                   id="admin-qr-canvas"
-                  value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass })} 
-                  size={200}
+                  value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass, realEmail: qrCodeData.realEmail })} 
+                  size={256}
+                  className="w-full h-full"
                   level="H"
                   includeMargin={true}
+                  imageSettings={{
+                    src: SUN_LOGO_SVG,
+                    height: 48,
+                    width: 48,
+                    excavate: true,
+                  }}
                 />
               </div>
 
               <div className="mb-6">
                 <p className="text-xs text-gray-400 uppercase tracking-widest font-bold mb-1">Account Email</p>
-                <p className="text-sm font-black text-gray-800 bg-gray-50 py-2 px-4 rounded-lg inline-block border border-gray-100">
+                <p className="text-sm sm:text-base font-black text-gray-800 bg-gray-50 py-2 px-4 rounded-lg inline-block border border-gray-100 break-all">
                   {qrCodeData.realEmail || qrCodeData.email}
                 </p>
               </div>
               
-              <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 mb-6">
-                <p className="text-xs text-blue-800 font-medium leading-relaxed mb-2">
-                  Instruct the {qrCodeData.grade === 'Teacher' ? 'teacher' : 'BOD'} to scan this QR code to log in.
-                </p>
-                <div className="flex items-start gap-2 mt-3 pt-3 border-t border-blue-200/50">
-                  <ShieldAlert size={16} className="text-blue-600 shrink-0 mt-0.5" />
-                  <p className="text-[10px] text-blue-700 font-bold text-left">
+              <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100 mb-6">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert size={20} className="text-blue-600 shrink-0 mt-0.5" />
+                  <p className="text-xs sm:text-sm text-blue-700 font-bold text-left leading-relaxed">
                     Note: Please keep this QR code safe and private, as it grants direct access to your account.
                   </p>
                 </div>
@@ -5014,20 +7215,110 @@ function AppContent() {
                 onClick={() => downloadQRCode(
                   'admin-qr-canvas', 
                   `FacultyClub_Admin_QR_${qrCodeData.grade}.png`,
-                  qrCodeData.realEmail || qrCodeData.email
+                  qrCodeData.realEmail || qrCodeData.email,
+                  qrCodeData.grade
                 )}
-                className="w-full py-4 bg-purple-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-purple-100"
+                className="w-full py-4 sm:py-5 bg-purple-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-purple-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-purple-100"
               >
-                <Download size={16} />
+                <Download size={18} />
                 Download QR Code
               </button>
               <button 
                 onClick={() => setQrCodeData(null)}
-                className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                className="w-full py-4 sm:py-5 bg-gray-100 text-gray-600 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-gray-200 transition-all"
               >
                 Done
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Archive School Year Modal */}
+      <AnimatePresence>
+        {showArchiveModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[2.5rem] w-full max-w-md overflow-hidden shadow-2xl"
+            >
+              <div className="p-8">
+                <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-[#0038A8] mb-6">
+                  <Archive size={32} />
+                </div>
+                <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight mb-2">Close School Year</h3>
+                <p className="text-sm text-gray-500 font-medium leading-relaxed mb-8">
+                  This will archive all current collections, expenses, and remittances into a history folder. 
+                  All teacher balances will be reset to zero for the new school year.
+                </p>
+
+                <div className="space-y-4 mb-8">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">School Year Label</label>
+                    <input 
+                      type="text" 
+                      value={archiveYear}
+                      onChange={(e) => setArchiveYear(e.target.value)}
+                      placeholder="e.g. 2025-2026"
+                      className="w-full px-5 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-[#0038A8] outline-none transition-all"
+                    />
+                  </div>
+                  
+                  <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-100 flex gap-3">
+                    <AlertTriangle className="text-yellow-600 shrink-0" size={20} />
+                    <p className="text-[11px] text-yellow-700 font-bold leading-relaxed">
+                      Make sure you have exported all necessary reports before proceeding. This action is irreversible.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setShowArchiveModal(false)}
+                    className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={handleArchiveSchoolYear}
+                    disabled={isArchiving || !archiveYear}
+                    className="flex-1 py-4 bg-[#0038A8] text-white rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isArchiving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                    Confirm Archive
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Wipe Success Modal */}
+      {showWipeSuccessModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100 text-center"
+          >
+            <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 text-green-600">
+              <CheckCircle size={40} />
+            </div>
+            
+            <h3 className="text-2xl font-black text-gray-900 mb-2 uppercase tracking-tight">System Wiped</h3>
+            <p className="text-gray-500 font-bold mb-8 leading-relaxed">
+              All records, payment history, expenses, and audit logs have been permanently deleted. The system has been reset to its initial state.
+            </p>
+
+            <button 
+              onClick={() => setShowWipeSuccessModal(false)}
+              className="w-full py-4 bg-[#0038A8] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-200"
+            >
+              Understood
+            </button>
           </motion.div>
         </div>
       )}
@@ -5079,54 +7370,7 @@ function AppContent() {
           </motion.div>
         </div>
       )}
-
-      {/* Login Success Pop-up */}
-      {showLoginSuccess && (
-        <div className="fixed inset-0 flex items-center justify-center z-[100] pointer-events-none bg-blue-900/10 backdrop-blur-sm">
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.5, y: 100 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.5, y: 100 }}
-            transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-            className="bg-white/90 backdrop-blur-xl p-10 rounded-[3rem] shadow-[0_30px_100px_rgba(0,56,168,0.2)] border border-blue-100 text-center max-w-sm w-full mx-4"
-          >
-            <div className="bg-green-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 text-green-600 shadow-inner">
-              <motion.div
-                initial={{ scale: 0, rotate: -45 }}
-                animate={{ scale: 1, rotate: 0 }}
-                transition={{ type: 'spring', damping: 12, stiffness: 200, delay: 0.2 }}
-              >
-                <CheckCircle size={48} />
-              </motion.div>
-            </div>
-            <h2 className="text-3xl font-black text-gray-900 mb-2 tracking-tight">Welcome Back!</h2>
-            <p className="text-[#0038A8] font-black uppercase tracking-[0.2em] text-[10px]">Successfully Logged In</p>
-            <div className="mt-8 flex justify-center gap-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0s' }}></div>
-              <div className="w-2 h-2 bg-green-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-              <div className="w-2 h-2 bg-red-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-            </div>
-          </motion.div>
-        </div>
-      )}
-
-      {/* Toast Notification */}
-      {toast && (
-        <motion.div 
-          initial={{ opacity: 0, y: 50, scale: 0.9 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.9 }}
-          className="fixed bottom-4 right-4 left-4 md:bottom-8 md:right-8 md:left-auto md:w-auto bg-white text-gray-900 px-6 py-4 md:px-8 md:py-5 rounded-2xl md:rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)] flex items-center gap-4 z-[100] border border-gray-100"
-        >
-          <div className="bg-green-100 p-3 rounded-2xl text-green-600">
-            <CheckCircle size={24} />
-          </div>
-          <div>
-            <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-0.5">Notification</p>
-            <p className="font-black text-sm text-gray-900">{toast}</p>
-          </div>
-        </motion.div>
-      )}
+      <GlobalOverlays showTermsModal={showTermsModal} setShowTermsModal={setShowTermsModal} showLoginSuccess={showLoginSuccess} toast={toast} />
     </div>
   );
 }

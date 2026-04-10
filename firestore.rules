@@ -15,6 +15,7 @@
 // Fields:
 //   - name: string (required)
 //   - email: string (required)
+//   - gender: string (optional, 'Male' or 'Female')
 //   - contactNumber: string (optional)
 //   - gradeLevel: string (required, 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10')
 //   - paidDueIds: list (required, array of strings)
@@ -58,6 +59,15 @@
 //   - timestamp: timestamp (required)
 //   - type: string (required, 'info', 'warning', 'critical')
 //
+// Collection: initial_balances
+// Document ID: auto-generated
+// Fields:
+//   - amount: number (required)
+//   - description: string (optional)
+//   - timestamp: timestamp (required)
+//   - adminId: string (required)
+//   - adminName: string (optional)
+//
 // ===============================================================
 
 rules_version = '2';
@@ -91,8 +101,8 @@ service cloud.firestore {
     function isTeacher(email) {
       let data = getUserData();
       return isAuthenticated() && (
-        request.auth.token.email == email || 
-        (data != null && data.role == 'teacher' && data.email == email)
+        (request.auth.token.email != null && request.auth.token.email.lower() == email.lower()) || 
+        (data != null && data.role == 'teacher' && data.email.lower() == email.lower())
       );
     }
 
@@ -118,7 +128,7 @@ service cloud.firestore {
     }
 
     match /teachers/{teacherId} {
-      allow read: if isAuthenticated() && (isAdmin() || isBOD() || isTeacher(resource.data.email));
+      allow read: if isAuthenticated();
       allow create: if isAdmin() || isBOD();
       allow update: if isAdmin() || isBOD() || isTeacher(resource.data.email);
       allow delete: if isAdmin();
@@ -145,11 +155,23 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    match /initial_balances/{balanceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
     match /audit_logs/{logId} {
       allow read: if isAdmin();
       allow create: if isAuthenticated();
       allow update: if false;
       allow delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
     }
   }
 }
