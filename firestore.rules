@@ -22,6 +22,7 @@
 //   - lastReceiptSent: timestamp (optional)
 //   - remitted: bool (optional)
 //   - remittanceId: string (optional)
+//   - paymentHistory: list (optional, array of objects containing dueId, amount, date, collector)
 //
 // Collection: dues
 // Document ID: auto-generated

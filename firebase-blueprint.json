@@ -29,7 +29,20 @@
         "remittedDueIds": { "type": "array", "items": { "type": "string" } },
         "lastReferenceNumber": { "type": "string" },
         "pendingDeletion": { "type": "boolean" },
-        "deletionRequestedBy": { "type": "string" }
+        "deletionRequestedBy": { "type": "string" },
+        "paymentHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dueId": { "type": "string" },
+              "amount": { "type": "number" },
+              "date": { "type": "string", "format": "date-time" },
+              "collector": { "type": "string" }
+            },
+            "required": ["dueId", "amount", "date", "collector"]
+          }
+        }
       },
       "required": ["name", "email", "gradeLevel"]
     },

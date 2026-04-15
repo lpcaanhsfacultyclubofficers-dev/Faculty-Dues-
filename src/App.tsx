@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo, Component, useRef } from 'react';
-import { Sun, Check, Send, Plus, User, Mail, PhilippinePeso, Heart, Upload, Trash2, FileText, FileDown, ChevronDown, ChevronUp, Loader2, LogOut, Shield, BarChart3, Wallet, Search, X, ShieldAlert, Lock, Eye, EyeOff, Users, CheckCircle, Clock, ChevronLeft, ChevronRight, AlertCircle, AlertTriangle, Database, QrCode, Download, CreditCard, Activity, Menu, LayoutDashboard, Settings, History, PieChart, TrendingUp, ArrowUpRight, ArrowDownRight, Filter, RefreshCw, Camera, ShieldCheck, MailWarning, Archive, FileBarChart } from 'lucide-react';
+import { Sun, Check, Send, Plus, User, Mail, PhilippinePeso, Heart, Upload, Trash2, FileText, FileDown, ChevronDown, ChevronUp, Loader2, LogOut, Shield, BarChart3, Wallet, Search, X, ShieldAlert, Lock, Eye, EyeOff, Users, CheckCircle, Clock, ChevronLeft, ChevronRight, AlertCircle, AlertTriangle, Database, QrCode, Download, CreditCard, Activity, Menu, LayoutDashboard, Settings, History, PieChart, TrendingUp, ArrowUpRight, ArrowDownRight, Filter, RefreshCw, Camera, ShieldCheck, MailWarning, Archive, FileBarChart, Undo, Redo } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { QRCodeCanvas } from 'qrcode.react';
 import { 
@@ -31,6 +31,7 @@ import {
 } from 'docx';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 import { AnimatePresence, motion } from 'motion/react';
 import { 
   auth, db, googleProvider, signInWithPopup, signOut, onAuthStateChanged, 
@@ -498,6 +499,9 @@ function AppContent() {
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | 'All'>('All');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'collection' | 'admin' | 'remittance' | 'expenses' | 'audit' | 'profile' | 'settings' | 'system'>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(true);
+  const [undoStack, setUndoStack] = useState<{ type: string, data: any }[]>([]);
+  const [redoStack, setRedoStack] = useState<{ type: string, data: any }[]>([]);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const [isSending, setIsSending] = useState<string | null>(null);
@@ -506,6 +510,9 @@ function AppContent() {
   const [editProfileEmail, setEditProfileEmail] = useState('');
   const [isBatchSending, setIsBatchSending] = useState(false);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+  const [isBatchUpdateModalOpen, setIsBatchUpdateModalOpen] = useState(false);
+  const [batchDueUpdates, setBatchDueUpdates] = useState<Record<string, 'paid' | 'unpaid' | 'no_change'>>({});
+  const [isBatchUpdating, setIsBatchUpdating] = useState(false);
   const [showWipeSuccessModal, setShowWipeSuccessModal] = useState(false);
   const [isSendingReminder, setIsSendingReminder] = useState<string | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
@@ -516,6 +523,9 @@ function AppContent() {
   const [newBalanceDescription, setNewBalanceDescription] = useState('');
   const [qrCodeData, setQrCodeData] = useState<{ email: string, pass?: string, grade: string, realEmail?: string } | null>(null);
   const [showScanner, setShowScanner] = useState(false);
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [previewReceiptData, setPreviewReceiptData] = useState<any>(null);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
   const [isScanSuccess, setIsScanSuccess] = useState(false);
   const [scannerCameraMode, setScannerCameraMode] = useState<'environment' | 'user'>('environment');
   const [isQRLogin, setIsQRLogin] = useState(false);
@@ -1497,13 +1507,96 @@ function AppContent() {
     }
   };
 
+  const confirmAllDeletions = async () => {
+    const duesToDelete = standardDues.filter(d => d.pendingDeletion);
+    const teachersToDelete = records.filter(r => r.pendingDeletion);
+
+    if (duesToDelete.length === 0 && teachersToDelete.length === 0) {
+      showToast("No pending deletions to confirm.");
+      return;
+    }
+
+    try {
+      const batch = writeBatch(db);
+      duesToDelete.forEach(d => batch.delete(doc(db, 'dues', d.id)));
+      teachersToDelete.forEach(t => batch.delete(doc(db, 'teachers', t.id)));
+      await batch.commit();
+
+      showToast(`Confirmed ${duesToDelete.length + teachersToDelete.length} deletions.`);
+      logActivity("Confirmed All Deletions", `Deleted ${duesToDelete.length} dues and ${teachersToDelete.length} teachers`, 'warning');
+      
+      setUndoStack(prev => [...prev, {
+        type: 'confirm_all_deletions',
+        data: { dues: duesToDelete, teachers: teachersToDelete }
+      }]);
+      setRedoStack([]);
+    } catch (error) {
+      console.error("Error confirming all deletions:", error);
+      showToast("Failed to confirm deletions.");
+    }
+  };
+
+  const handleUndo = async () => {
+    if (undoStack.length === 0) return;
+    const lastAction = undoStack[undoStack.length - 1];
+    
+    try {
+      const batch = writeBatch(db);
+      if (lastAction.type === 'delete_due') {
+        batch.set(doc(db, 'dues', lastAction.data.id), lastAction.data);
+      } else if (lastAction.type === 'delete_teacher') {
+        batch.set(doc(db, 'teachers', lastAction.data.id), lastAction.data);
+      } else if (lastAction.type === 'confirm_all_deletions') {
+        lastAction.data.dues.forEach((d: any) => batch.set(doc(db, 'dues', d.id), d));
+        lastAction.data.teachers.forEach((t: any) => batch.set(doc(db, 'teachers', t.id), t));
+      }
+      await batch.commit();
+      
+      setUndoStack(prev => prev.slice(0, -1));
+      setRedoStack(prev => [...prev, lastAction]);
+      showToast("Action undone.");
+    } catch (error) {
+      console.error("Error undoing action:", error);
+      showToast("Failed to undo action.");
+    }
+  };
+
+  const handleRedo = async () => {
+    if (redoStack.length === 0) return;
+    const lastAction = redoStack[redoStack.length - 1];
+    
+    try {
+      const batch = writeBatch(db);
+      if (lastAction.type === 'delete_due') {
+        batch.delete(doc(db, 'dues', lastAction.data.id));
+      } else if (lastAction.type === 'delete_teacher') {
+        batch.delete(doc(db, 'teachers', lastAction.data.id));
+      } else if (lastAction.type === 'confirm_all_deletions') {
+        lastAction.data.dues.forEach((d: any) => batch.delete(doc(db, 'dues', d.id)));
+        lastAction.data.teachers.forEach((t: any) => batch.delete(doc(db, 'teachers', t.id)));
+      }
+      await batch.commit();
+      
+      setRedoStack(prev => prev.slice(0, -1));
+      setUndoStack(prev => [...prev, lastAction]);
+      showToast("Action redone.");
+    } catch (error) {
+      console.error("Error redoing action:", error);
+      showToast("Failed to redo action.");
+    }
+  };
+
   const deleteStandardDue = async (id: string) => {
     if (profile?.role === 'admin') {
       try {
         const due = standardDues.find(d => d.id === id);
+        if (!due) return;
         await deleteDoc(doc(db, 'dues', id));
         showToast("Standard due removed.");
-        logActivity("Deleted Standard Due", `Removed ${due?.name}`, 'warning');
+        logActivity("Deleted Standard Due", `Removed ${due.name}`, 'warning');
+        
+        setUndoStack(prev => [...prev, { type: 'delete_due', data: due }]);
+        setRedoStack([]);
       } catch (error) {
         console.error("Error deleting due:", error);
       }
@@ -1675,9 +1768,13 @@ function AppContent() {
     if (profile?.role === 'admin') {
       try {
         const teacher = records.find(r => r.id === id);
+        if (!teacher) return;
         await deleteDoc(doc(db, 'teachers', id));
         showToast("1 teacher record removed.");
-        logActivity("Deleted Teacher", `Removed ${teacher?.name} from ${teacher?.gradeLevel}`, 'warning');
+        logActivity("Deleted Teacher", `Removed ${teacher.name} from ${teacher.gradeLevel}`, 'warning');
+        
+        setUndoStack(prev => [...prev, { type: 'delete_teacher', data: teacher }]);
+        setRedoStack([]);
       } catch (error) {
         console.error("Error deleting teacher:", error);
       }
@@ -3105,100 +3202,210 @@ function AppContent() {
 
   const generateHTMLReceipt = (receipt: any) => {
     return `
-<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; overflow: hidden;">
-  <div style="background-color: #0038A8; color: white; padding: 20px; text-align: center;">
-    <h1 style="margin: 0; font-size: 24px;">Official Receipt</h1>
-    <p style="margin: 5px 0 0 0; opacity: 0.9;">Las Piñas CAA Faculty Club</p>
-  </div>
-  <div style="padding: 20px;">
-    <div style="display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px;">
-      <div>
-        <p style="margin: 0; color: #666; font-size: 14px;">Date & Time</p>
-        <p style="margin: 5px 0 0 0; font-weight: bold;">${receipt.date}</p>
-      </div>
-      <div style="text-align: right;">
-        <p style="margin: 0; color: #666; font-size: 14px;">Reference No.</p>
-        <p style="margin: 5px 0 0 0; font-weight: bold;">${receipt.referenceNumber}</p>
-      </div>
-    </div>
-    
-    <div style="margin-bottom: 20px;">
-      <p style="margin: 0 0 5px 0; color: #666; font-size: 14px;">Received From</p>
-      <p style="margin: 0; font-size: 18px; font-weight: bold;">${receipt.teacherName}</p>
-      <p style="margin: 5px 0 0 0; color: #666;">${receipt.email}</p>
-    </div>
+<style>
+  .receipt-container {
+    font-family: 'Inter', Arial, sans-serif;
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+    background: #ffffff;
+    color: #333;
+    padding: 40px;
+    box-sizing: border-box;
+  }
+  .receipt-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0038A8; padding-bottom: 20px; margin-bottom: 30px; }
+  .receipt-title { margin: 0; font-size: 36px; color: #0038A8; font-weight: 900; letter-spacing: -1px; }
+  .receipt-subtitle { margin: 5px 0 0 0; font-size: 16px; color: #666; font-weight: 600; }
+  .receipt-meta { text-align: right; }
+  .receipt-meta-label { margin: 0; font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
+  .receipt-meta-value { margin: 2px 0 0 0; font-size: 20px; font-weight: 900; color: #111; }
+  .receipt-meta-value-small { margin: 2px 0 0 0; font-size: 16px; font-weight: bold; color: #111; }
+  .receipt-customer { margin-bottom: 30px; background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; }
+  .receipt-customer-name { margin: 5px 0 4px 0; font-size: 24px; color: #0f172a; font-weight: 900; letter-spacing: -0.5px; }
+  .receipt-customer-email { margin: 0; font-size: 16px; color: #475569; font-weight: 500; }
+  .receipt-section-title { margin: 0 0 15px 0; font-size: 18px; color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; font-weight: 800; }
+  .receipt-table { width: 100%; border-collapse: collapse; }
+  .receipt-table th { text-align: left; padding: 12px; background: #f1f5f9; color: #475569; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .receipt-table th.right { text-align: right; }
+  .receipt-table td { padding: 12px; border-bottom: 1px solid #f1f5f9; color: #1e293b; font-weight: 600; font-size: 14px; }
+  .receipt-table td.right { text-align: right; font-weight: 700; }
+  .receipt-totals-wrapper { display: flex; justify-content: flex-end; margin-bottom: 30px; }
+  .receipt-totals { width: 300px; background: #f8fafc; padding: 20px; border-radius: 12px; border: 1px solid #e2e8f0; }
+  .receipt-totals-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #cbd5e1; }
+  .receipt-totals-row.total { padding-top: 15px; margin-top: 5px; border-bottom: none; }
+  .receipt-totals-label { color: #64748b; font-weight: 600; font-size: 14px; }
+  .receipt-totals-value { color: #1e293b; font-weight: 700; font-size: 14px; }
+  .receipt-totals-label.total { color: #0f172a; font-weight: 900; font-size: 18px; }
+  .receipt-totals-value.total { color: #16a34a; font-weight: 900; font-size: 20px; }
+  .receipt-status-wrapper { display: flex; gap: 15px; margin-bottom: 40px; }
+  .receipt-status-box { flex: 1; padding: 20px; border-radius: 12px; }
+  .receipt-status-label { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
+  .receipt-status-value { margin: 8px 0 0 0; font-size: 20px; font-weight: 900; }
+  .receipt-signature { margin-top: 50px; display: flex; justify-content: flex-end; }
+  .receipt-signature-box { text-align: center; width: 250px; }
+  .receipt-signature-line { border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 10px; }
+  .receipt-signature-name { margin: 0; font-size: 20px; font-weight: 800; color: #0038A8; }
+  .receipt-signature-title { margin: 0; font-size: 13px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; font-weight: bold; }
 
-    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+  @media (max-width: 600px) {
+    .receipt-container { padding: 15px; }
+    .receipt-header { flex-direction: column; gap: 15px; }
+    .receipt-meta { text-align: left; }
+    .receipt-title { font-size: 24px; }
+    .receipt-subtitle { font-size: 14px; }
+    .receipt-customer { padding: 15px; }
+    .receipt-customer-name { font-size: 20px; }
+    .receipt-customer-email { font-size: 14px; }
+    .receipt-table th, .receipt-table td { padding: 8px; font-size: 12px; }
+    .receipt-totals-wrapper { justify-content: flex-start; }
+    .receipt-totals { width: 100%; }
+    .receipt-status-wrapper { flex-direction: column; gap: 10px; }
+    .receipt-signature { justify-content: flex-start; }
+    .receipt-signature-box { width: 100%; }
+  }
+</style>
+<div class="receipt-container">
+  <!-- Header -->
+  <div class="receipt-header">
+    <div>
+      <h1 class="receipt-title">OFFICIAL RECEIPT</h1>
+      <p class="receipt-subtitle">Las Piñas CAA Faculty Club</p>
+    </div>
+    <div class="receipt-meta">
+      <p class="receipt-meta-label">Reference No.</p>
+      <p class="receipt-meta-value">${receipt.referenceNumber}</p>
+      <p class="receipt-meta-label" style="margin-top: 10px;">Date</p>
+      <p class="receipt-meta-value-small">${receipt.date}</p>
+    </div>
+  </div>
+
+  <!-- Customer Info -->
+  <div class="receipt-customer">
+    <p class="receipt-meta-label">Received From</p>
+    <h2 class="receipt-customer-name">${receipt.teacherName}</h2>
+    <p class="receipt-customer-email">${receipt.email}</p>
+  </div>
+
+  <!-- Payment Details -->
+  <div style="margin-bottom: 30px;">
+    <h3 class="receipt-section-title">Payment Details</h3>
+    <table class="receipt-table">
       <thead>
-        <tr style="background-color: #f9f9f9;">
-          <th style="padding: 10px; text-align: left; border-bottom: 2px solid #ddd;">Description (Paid)</th>
-          <th style="padding: 10px; text-align: right; border-bottom: 2px solid #ddd;">Amount (₱)</th>
+        <tr>
+          <th>Description</th>
+          <th class="right">Amount</th>
         </tr>
       </thead>
       <tbody>
         ${receipt.breakdown.map((item: any) => `
           <tr>
-            <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}</td>
-            <td style="padding: 10px; text-align: right; border-bottom: 1px solid #eee;">₱${item.amount.toFixed(2)}</td>
+            <td>${item.name}</td>
+            <td class="right">₱${item.amount.toFixed(2)}</td>
           </tr>
         `).join('')}
       </tbody>
-      <tfoot>
-        <tr>
-          <td style="padding: 10px; font-weight: bold; text-align: right;">Collected Now</td>
-          <td style="padding: 10px; font-weight: bold; text-align: right; font-size: 18px; color: #008000;">₱${receipt.total.toFixed(2)}</td>
-        </tr>
-      </tfoot>
     </table>
+  </div>
 
-    ${receipt.collectiblesBreakdown && receipt.collectiblesBreakdown.length > 0 ? `
-    <div style="margin-top: 20px; border: 1px solid #ffeeba; border-radius: 8px; background-color: #fff3cd; padding: 15px;">
-      <h3 style="margin: 0 0 10px 0; font-size: 16px; color: #856404;">Collectibles</h3>
-      <table style="width: 100%; border-collapse: collapse;">
-        ${receipt.collectiblesBreakdown.map((item: any) => `
+  ${receipt.paymentHistory && receipt.paymentHistory.length > 0 ? `
+  <!-- Payment History -->
+  <div style="margin-bottom: 30px;">
+    <h3 class="receipt-section-title" style="font-size: 16px;">Payment History</h3>
+    <table class="receipt-table">
+      <thead>
+        <tr>
+          <th>Due</th>
+          <th>Date</th>
+          <th class="right">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${receipt.paymentHistory.map((h: any) => `
           <tr>
-            <td style="padding: 5px 0; color: #856404; font-size: 14px;">${item.name}</td>
-            <td style="padding: 5px 0; text-align: right; color: #856404; font-size: 14px;">₱${item.amount.toFixed(2)}</td>
+            <td>${h.dueName}</td>
+            <td>${new Date(h.date).toLocaleDateString()}</td>
+            <td class="right">₱${h.amount.toFixed(2)}</td>
           </tr>
         `).join('')}
-        <tr style="border-top: 1px solid #ffeeba;">
-          <td style="padding: 10px 0 0 0; font-weight: bold; color: #856404;">Balance</td>
-          <td style="padding: 10px 0 0 0; text-align: right; font-weight: bold; color: #856404;">₱${receipt.balance.toFixed(2)}</td>
-        </tr>
-      </table>
+      </tbody>
+    </table>
+  </div>
+  ` : ''}
+
+  <!-- Totals -->
+  <div class="receipt-totals-wrapper">
+    <div class="receipt-totals">
+      <div class="receipt-totals-row">
+        <span class="receipt-totals-label">Subtotal</span>
+        <span class="receipt-totals-value">₱${receipt.total.toFixed(2)}</span>
+      </div>
+      <div class="receipt-totals-row total">
+        <span class="receipt-totals-label total">Total Paid</span>
+        <span class="receipt-totals-value total">₱${receipt.total.toFixed(2)}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status & Collectibles -->
+  <div class="receipt-status-wrapper">
+    <div class="receipt-status-box" style="background: ${receipt.isFullyPaid ? '#f0fdf4' : '#fffbeb'}; border: 1px solid ${receipt.isFullyPaid ? '#bbf7d0' : '#fef3c7'};">
+      <p class="receipt-status-label" style="color: ${receipt.isFullyPaid ? '#166534' : '#92400e'};">Payment Status</p>
+      <p class="receipt-status-value" style="color: ${receipt.isFullyPaid ? '#15803d' : '#b45309'};">${receipt.isFullyPaid ? 'Fully Paid' : 'Partial Payment'}</p>
+    </div>
+    
+    ${receipt.collectiblesBreakdown && receipt.collectiblesBreakdown.length > 0 ? `
+    <div class="receipt-status-box" style="background: #fef2f2; border: 1px solid #fecaca;">
+      <p class="receipt-status-label" style="color: #991b1b;">Remaining Balance</p>
+      <p class="receipt-status-value" style="color: #b91c1c;">₱${receipt.balance.toFixed(2)}</p>
     </div>
     ` : ''}
+  </div>
 
-    <div style="background-color: ${receipt.isFullyPaid ? '#FCD116' : '#f3f4f6'}; color: #111; padding: 10px; text-align: center; border-radius: 4px; font-weight: bold; margin: 20px 0;">
-      Status: ${receipt.isFullyPaid ? 'Fully Paid' : 'Partial Payment'}
-    </div>
-
-    <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px dashed #ccc;">
-      <p style="margin: 0; color: #666;">Signed by</p>
-      <p style="margin: 5px 0 0 0; font-weight: bold; color: #0038A8;">${receipt.sender}</p>
+  <!-- Signatures -->
+  <div class="receipt-signature">
+    <div class="receipt-signature-box">
+      <div class="receipt-signature-line"></div>
+      <p class="receipt-signature-name">${receipt.sender}</p>
+      <p class="receipt-signature-title">Authorized Signature</p>
     </div>
   </div>
 </div>
-    `;
+`;
   };
 
   const sendReceiptEmail = async (record: TeacherRecord) => {
     const paidDues = standardDues.filter(d => record.paidDueIds.includes(d.id));
-    const collectiblesDues = standardDues.filter(d => !record.paidDueIds.includes(d.id));
+    const collectiblesDues = standardDues.filter(d => !record.paidDueIds.includes(d.id) && !d.isVoluntary);
     
     if (paidDues.length === 0) return { success: false, error: "No paid dues" };
 
-    const total = paidDues.reduce((sum, d) => sum + d.amount, 0);
+    const total = paidDues.reduce((sum, d) => {
+      if (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) {
+        return sum + record.voluntaryPayments[d.id];
+      }
+      return sum + d.amount;
+    }, 0);
     const balance = collectiblesDues.reduce((sum, d) => sum + d.amount, 0);
-    const isFullyPaid = standardDues.length > 0 && standardDues.every(d => record.paidDueIds.includes(d.id));
+    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+    const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
 
     const receipt = {
       date: new Date().toLocaleString(),
-      referenceNumber: `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      referenceNumber: record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
       teacherName: record.name,
       email: record.email,
-      breakdown: paidDues.map(d => ({ name: d.name, amount: d.amount })),
+      breakdown: paidDues.map(d => ({ 
+        name: d.isVoluntary ? `${d.name} (Vol)` : d.name, 
+        amount: (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) ? record.voluntaryPayments[d.id] : d.amount 
+      })),
       collectiblesBreakdown: collectiblesDues.map(d => ({ name: d.name, amount: d.amount })),
+      paymentHistory: (record.paymentHistory || []).map(h => {
+        const due = standardDues.find(d => d.id === h.dueId);
+        return {
+          ...h,
+          dueName: due?.isVoluntary ? `${h.dueName} (Vol)` : h.dueName
+        };
+      }),
       total: total,
       balance: balance,
       isFullyPaid: isFullyPaid,
@@ -3245,6 +3452,258 @@ function AppContent() {
     setIsSending(null);
   };
 
+  const handleDownloadReceipt = (record: TeacherRecord) => {
+    const safePaidDueIds = record.paidDueIds || [];
+    const paidDues = standardDues.filter(d => safePaidDueIds.includes(d.id));
+    const collectiblesDues = standardDues.filter(d => !safePaidDueIds.includes(d.id) && !d.isVoluntary);
+    
+    if (paidDues.length === 0) {
+      showToast("No paid dues to generate receipt.");
+      return;
+    }
+
+    const total = paidDues.reduce((sum, d) => {
+      if (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) {
+        return sum + record.voluntaryPayments[d.id];
+      }
+      return sum + d.amount;
+    }, 0);
+    const balance = collectiblesDues.reduce((sum, d) => sum + d.amount, 0);
+    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+    const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => safePaidDueIds.includes(d.id));
+
+    const receipt = {
+      date: new Date().toLocaleString(),
+      referenceNumber: record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      teacherName: record.name,
+      email: record.email,
+      breakdown: paidDues.map(d => ({ 
+        name: d.isVoluntary ? `${d.name} (Vol)` : d.name, 
+        amount: (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) ? record.voluntaryPayments[d.id] : d.amount 
+      })),
+      collectiblesBreakdown: collectiblesDues.map(d => ({ name: d.name, amount: d.amount })),
+      paymentHistory: (record.paymentHistory || []).map(h => {
+        const due = standardDues.find(d => d.id === h.dueId);
+        return {
+          ...h,
+          dueName: due?.isVoluntary ? `${h.dueName} (Vol)` : h.dueName
+        };
+      }),
+      total: total,
+      balance: balance,
+      isFullyPaid: isFullyPaid,
+      sender: "Las Piñas CAA Faculty Club Officers - BODs"
+    };
+
+    setPreviewReceiptData(receipt);
+    setShowReceiptPreview(true);
+  };
+
+  const printReceipt = () => {
+    if (!previewReceiptData) return;
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>Receipt - ${previewReceiptData.referenceNumber}</title>
+            <style>
+              body { margin: 0; padding: 20px; font-family: 'Inter', Arial, sans-serif; }
+              @media print {
+                body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+              }
+            </style>
+          </head>
+          <body>
+            ${generateHTMLReceipt(previewReceiptData)}
+            <script>
+              window.onload = () => {
+                window.print();
+                setTimeout(() => window.close(), 500);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    } else {
+      showToast("Please allow popups to print the receipt.");
+    }
+  };
+
+  const downloadReceiptAsDocx = async () => {
+    if (!previewReceiptData) return;
+    setIsDownloadingReceipt(true);
+    
+    try {
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel } = await import("docx");
+      const { saveAs } = await import("file-saver");
+
+      const receipt = previewReceiptData;
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({ text: "OFFICIAL RECEIPT", bold: true, size: 48, color: "0038A8" }),
+              ],
+            }),
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [
+                new TextRun({ text: "Las Piñas CAA Faculty Club", size: 24, color: "666666" }),
+              ],
+              spacing: { after: 400 },
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: "Reference No.: ", bold: true }),
+                new TextRun({ text: receipt.referenceNumber }),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: "Date: ", bold: true }),
+                new TextRun({ text: receipt.date }),
+              ],
+              spacing: { after: 400 },
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: "Received From:", bold: true, size: 24 }),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: receipt.teacherName, bold: true, size: 32 }),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: receipt.email, color: "666666" }),
+              ],
+              spacing: { after: 400 },
+            }),
+            new Paragraph({
+              text: "Payment Details",
+              heading: HeadingLevel.HEADING_3,
+              spacing: { after: 200 },
+            }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      children: [new Paragraph({ children: [new TextRun({ text: "Description", bold: true })] })],
+                      shading: { fill: "F1F5F9" },
+                      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                    }),
+                    new TableCell({
+                      children: [new Paragraph({ children: [new TextRun({ text: "Amount", bold: true })], alignment: AlignmentType.RIGHT })],
+                      shading: { fill: "F1F5F9" },
+                      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                    }),
+                  ],
+                }),
+                ...receipt.breakdown.map((item: any) => new TableRow({
+                  children: [
+                    new TableCell({
+                      children: [new Paragraph({ text: item.name })],
+                      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                    }),
+                    new TableCell({
+                      children: [new Paragraph({ text: `PHP ${item.amount.toFixed(2)}`, alignment: AlignmentType.RIGHT })],
+                      margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                    }),
+                  ],
+                })),
+              ],
+            }),
+            new Paragraph({ spacing: { before: 400 } }),
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new TextRun({ text: "Subtotal: ", bold: true }),
+                new TextRun({ text: `PHP ${receipt.total.toFixed(2)}` }),
+              ],
+            }),
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new TextRun({ text: "Total Paid: ", bold: true, size: 28 }),
+                new TextRun({ text: `PHP ${receipt.total.toFixed(2)}`, bold: true, size: 28, color: "16A34A" }),
+              ],
+              spacing: { after: 400 },
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: "Payment Status: ", bold: true }),
+                new TextRun({ text: receipt.isFullyPaid ? "Fully Paid" : "Partial Payment", bold: true, color: receipt.isFullyPaid ? "15803D" : "B45309" }),
+              ],
+            }),
+            ...(receipt.collectiblesBreakdown && receipt.collectiblesBreakdown.length > 0 ? [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "Remaining Balance: ", bold: true }),
+                  new TextRun({ text: `PHP ${receipt.balance.toFixed(2)}`, bold: true, color: "B91C1C" }),
+                ],
+              })
+            ] : []),
+            ...(receipt.paymentHistory && receipt.paymentHistory.length > 0 ? [
+              new Paragraph({ spacing: { before: 400, after: 200 }, text: "Payment History", heading: HeadingLevel.HEADING_3 }),
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                rows: [
+                  new TableRow({
+                    children: [
+                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Due", bold: true })] })], shading: { fill: "F1F5F9" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Date", bold: true })] })], shading: { fill: "F1F5F9" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                      new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Amount", bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "F1F5F9" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                    ],
+                  }),
+                  ...receipt.paymentHistory.map((h: any) => new TableRow({
+                    children: [
+                      new TableCell({ children: [new Paragraph({ text: h.dueName })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                      new TableCell({ children: [new Paragraph({ text: new Date(h.date).toLocaleDateString() })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                      new TableCell({ children: [new Paragraph({ text: `PHP ${h.amount.toFixed(2)}`, alignment: AlignmentType.RIGHT })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                    ],
+                  })),
+                ],
+              })
+            ] : []),
+            new Paragraph({ spacing: { before: 800 } }),
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new TextRun({ text: receipt.sender, bold: true, size: 24 }),
+              ],
+            }),
+            new Paragraph({
+              alignment: AlignmentType.RIGHT,
+              children: [
+                new TextRun({ text: "Authorized Signature", color: "666666" }),
+              ],
+            }),
+          ],
+        }],
+      });
+
+      const blob = await Packer.toBlob(doc);
+      saveAs(blob, `Receipt_${previewReceiptData.teacherName.replace(/\s+/g, '_')}_${previewReceiptData.referenceNumber}.docx`);
+      showToast("Receipt downloaded successfully as DOCX.");
+      
+    } catch (error) {
+      console.error("Download Error:", error);
+      showToast("Failed to download receipt.");
+    } finally {
+      setIsDownloadingReceipt(false);
+    }
+  };
+
   const handleBatchSendReceipts = async () => {
     const selectedTeachers = filteredRecords.filter(r => selectedTeacherIds.has(r.id));
     const teachersToReceive = selectedTeachers.filter(r => r.paidDueIds.length > 0);
@@ -3261,12 +3720,27 @@ function AppContent() {
     for (let i = 0; i < total; i++) {
       const record = teachersToReceive[i];
       showToast(`Sending receipt ${i + 1} of ${total}...`);
-      const result = await sendReceiptEmail(record);
-      if (result.success) successCount++;
       
-      // Delay of 1.5 seconds between emails to prevent rate limiting/backend overload
+      let result = await sendReceiptEmail(record);
+      
+      // Retry logic: if it fails, wait 2 seconds and try again (up to 2 retries)
+      let retries = 2;
+      while (!result.success && retries > 0) {
+        console.log(`Failed to send to ${record.email}, retrying... (${retries} retries left)`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        result = await sendReceiptEmail(record);
+        retries--;
+      }
+      
+      if (result.success) {
+        successCount++;
+      } else {
+        console.error(`Final failure sending to ${record.email}: ${result.error}`);
+      }
+      
+      // Delay of 3 seconds between emails to prevent rate limiting/backend overload
       if (i < total - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
 
@@ -3294,6 +3768,64 @@ function AppContent() {
   const selectAllWithPayments = () => {
     const withPayments = filteredRecords.filter(r => r.paidDueIds.length > 0).map(r => r.id);
     setSelectedTeacherIds(new Set(withPayments));
+  };
+
+  const handleBatchUpdateDues = async () => {
+    if (selectedTeacherIds.size === 0) return;
+    
+    const updatesToApply = Object.entries(batchDueUpdates).filter(([_, action]) => action !== 'no_change');
+    if (updatesToApply.length === 0) {
+      showToast("No changes selected.");
+      return;
+    }
+
+    setIsBatchUpdating(true);
+    try {
+      const updatePromises = Array.from(selectedTeacherIds).map(async (teacherId) => {
+        const teacher = records.find(r => r.id === teacherId);
+        if (!teacher) return;
+        
+        let newPaidIds = [...teacher.paidDueIds];
+        let newPaymentHistory = [...(teacher.paymentHistory || [])];
+        
+        updatesToApply.forEach(([dueId, action]) => {
+          if (action === 'paid' && !newPaidIds.includes(dueId)) {
+            newPaidIds.push(dueId);
+            const due = standardDues.find(d => d.id === dueId);
+            newPaymentHistory.push({
+              dueId,
+              dueName: due?.name || 'Unknown Due',
+              date: new Date().toISOString(),
+              amount: due?.amount || 0,
+              collectedBy: profile?.name || 'System',
+              collectedByRole: profile?.role || 'admin'
+            });
+          } else if (action === 'unpaid' && newPaidIds.includes(dueId)) {
+            newPaidIds = newPaidIds.filter(id => id !== dueId);
+            const index = newPaymentHistory.findIndex(h => h.dueId === dueId);
+            if (index > -1) newPaymentHistory.splice(index, 1);
+          }
+        });
+        
+        await updateDoc(doc(db, 'teachers', teacherId), {
+          paidDueIds: newPaidIds,
+          paymentHistory: newPaymentHistory
+        });
+      });
+
+      await Promise.all(updatePromises);
+      
+      showToast(`Successfully updated dues for ${selectedTeacherIds.size} teachers.`);
+      logActivity("Batch Update Dues", `Updated dues for ${selectedTeacherIds.size} teachers`);
+      setIsBatchUpdateModalOpen(false);
+      setBatchDueUpdates({});
+      clearSelection();
+    } catch (error) {
+      console.error("Error batch updating dues:", error);
+      showToast("Failed to update dues.");
+    } finally {
+      setIsBatchUpdating(false);
+    }
   };
 
   const clearSelection = () => {
@@ -3877,6 +4409,14 @@ function AppContent() {
                     Edit Profile
                   </button>
                   <button 
+                    onClick={() => teacherRecord && handleDownloadReceipt(teacherRecord)}
+                    disabled={totalPaidAmount === 0}
+                    className="flex items-center justify-center gap-2 bg-green-50 text-green-600 py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-green-100 transition-all active:scale-95 disabled:opacity-50"
+                  >
+                    <Download size={18} />
+                    Download Receipt
+                  </button>
+                  <button 
                     onClick={() => generateTeacherQRCode(profile.email, teacherRecord?.gradeLevel || 'Teacher', profile.name)}
                     className="flex items-center justify-center gap-2 bg-blue-50 text-[#0038A8] py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-100 transition-all active:scale-95"
                   >
@@ -4275,6 +4815,62 @@ function AppContent() {
         )}
         </>
         )}
+        {/* Receipt Preview Modal */}
+        {showReceiptPreview && previewReceiptData && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-2xl w-full shadow-2xl border border-gray-100 relative max-h-[90vh] flex flex-col"
+            >
+              <button 
+                onClick={() => setShowReceiptPreview(false)}
+                className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+              >
+                <X size={20} />
+              </button>
+              
+              <h3 className="text-2xl font-black text-gray-900 mb-6 text-center">Receipt Preview</h3>
+              
+              <div className="flex-1 overflow-auto mb-8 p-4 bg-gray-50 rounded-3xl border border-gray-100 flex justify-center">
+                <div id="receipt-content" className="bg-white shadow-sm" dangerouslySetInnerHTML={{ __html: generateHTMLReceipt(previewReceiptData) }} />
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button 
+                  onClick={() => setShowReceiptPreview(false)}
+                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                >
+                  Close
+                </button>
+                <button 
+                  onClick={printReceipt}
+                  className="flex-1 py-4 bg-purple-50 text-purple-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-100 transition-all flex items-center justify-center gap-2"
+                >
+                  <FileText size={16} />
+                  Print
+                </button>
+                <button 
+                  onClick={downloadReceiptAsDocx}
+                  disabled={isDownloadingReceipt}
+                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isDownloadingReceipt ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Generating DOCX...
+                    </>
+                  ) : (
+                    <>
+                      <Download size={16} />
+                      Download DOCX
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
         <GlobalOverlays 
           showTermsModal={showTermsModal} 
           setShowTermsModal={setShowTermsModal} 
@@ -4314,25 +4910,23 @@ function AppContent() {
 
       {/* Sidebar Navigation */}
       <AnimatePresence>
-        {(isSidebarOpen || window.innerWidth >= 1024) && (
-          <motion.aside 
-            initial={{ x: -300, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -300, opacity: 0 }}
-            className={`fixed lg:static inset-y-0 left-0 z-50 w-72 lg:w-80 bg-white border-r border-gray-100 flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 ${
-              isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-            }`}
-          >
-            <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
-              <div className="flex items-center gap-4 mb-10">
-                <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200 transform -rotate-6">
-                  <Sun className="text-[#FCD116] animate-sun-rotate" size={28} fill="#FCD116" />
-                </div>
-                <div>
-                  <h1 className="text-xl lg:text-2xl font-black text-gray-900 leading-none tracking-tight">Faculty Club</h1>
-                  <p className="text-[10px] lg:text-xs text-[#0038A8] font-black uppercase tracking-widest mt-1">Management System</p>
-                </div>
+        <motion.aside 
+          className={`fixed lg:static inset-y-0 left-0 z-50 bg-white border-r border-gray-100 flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 overflow-hidden ${
+            isSidebarOpen ? 'translate-x-0 w-72' : '-translate-x-full w-72'
+          } ${
+            isDesktopSidebarOpen ? 'lg:translate-x-0 lg:w-80' : 'lg:-translate-x-full lg:w-0 lg:border-none'
+          }`}
+        >
+          <div className="p-8 flex-1 overflow-y-auto custom-scrollbar w-72 lg:w-80">
+            <div className="flex items-center gap-4 mb-10">
+              <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200 transform -rotate-6 shrink-0">
+                <Sun className="text-[#FCD116] animate-sun-rotate" size={28} fill="#FCD116" />
               </div>
+              <div className="shrink-0">
+                <h1 className="text-xl lg:text-2xl font-black text-gray-900 leading-none tracking-tight">Faculty Club</h1>
+                <p className="text-[10px] lg:text-xs text-[#0038A8] font-black uppercase tracking-widest mt-1">Management System</p>
+              </div>
+            </div>
 
               <nav className="space-y-2">
                 <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Main Menu</p>
@@ -4384,18 +4978,26 @@ function AppContent() {
               </button>
             </div>
           </motion.aside>
-        )}
       </AnimatePresence>
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-h-0 relative">
         {/* Top Bar (Desktop) */}
         <header className="hidden lg:flex items-center justify-between px-10 py-6 bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-30">
-          <div>
-            <h2 className="text-2xl lg:text-3xl font-black text-gray-900 capitalize tracking-tight">{activeTab.replace('-', ' ')}</h2>
-            <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
-              {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-            </p>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsDesktopSidebarOpen(!isDesktopSidebarOpen)}
+              className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+              title={isDesktopSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+            >
+              <Menu size={24} className="text-gray-600" />
+            </button>
+            <div>
+              <h2 className="text-2xl lg:text-3xl font-black text-gray-900 capitalize tracking-tight">{activeTab.replace('-', ' ')}</h2>
+              <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
+                {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              </p>
+            </div>
           </div>
           
           <div className="flex items-center gap-4">
@@ -4545,15 +5147,55 @@ function AppContent() {
                     </div>
                   </div>
 
-                  {/* Quick Stats Grid */}
+                  {/* Financial Metrics Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                     <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
                       <div className="flex items-center justify-between mb-4">
                         <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
-                          <Users size={24} />
+                          <Wallet size={24} />
                         </div>
-                        <div className="flex items-center gap-1 text-green-600 text-[10px] font-black">
-                          <ArrowUpRight size={14} /> +2.5%
+                      </div>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Collections</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="p-3 bg-red-50 rounded-2xl text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
+                          <CreditCard size={24} />
+                        </div>
+                      </div>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Expenses</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="p-3 bg-yellow-50 rounded-2xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-all">
+                          <Database size={24} />
+                        </div>
+                      </div>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Initial Balance</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalInitialBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="p-3 bg-green-50 rounded-2xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
+                          <PhilippinePeso size={24} />
+                        </div>
+                      </div>
+                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Net Club Balance</p>
+                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                    </div>
+                  </div>
+
+                  {/* Faculty & System Stats Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
+                          <Users size={24} />
                         </div>
                       </div>
                       <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Faculty</p>
@@ -4573,19 +5215,6 @@ function AppContent() {
                       <h3 className="text-2xl lg:text-3xl font-black text-gray-900">
                         {fullyPaidCount}
                       </h3>
-                    </div>
-
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-red-50 rounded-2xl text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
-                          <CreditCard size={24} />
-                        </div>
-                        <div className="flex items-center gap-1 text-red-600 text-[10px] font-black">
-                          <ArrowDownRight size={14} /> -₱2.4k
-                        </div>
-                      </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Expenses</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalExpenses.toLocaleString()}</h3>
                     </div>
 
                     <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
@@ -4878,18 +5507,47 @@ function AppContent() {
               </div>
             </div>
 
-            {/* Admin Alert for Pending Deletions */}
-            {profile?.role === 'admin' && (standardDues.some(d => d.pendingDeletion) || records.some(r => r.pendingDeletion)) && (
-              <div className="bg-red-50 border border-red-100 p-4 rounded-2xl shadow-sm animate-pulse">
-                <div className="flex items-center gap-3">
-                  <ShieldAlert className="text-red-500" size={24} />
-                  <div>
-                    <h3 className="text-xs lg:text-sm font-black text-red-800 uppercase tracking-wider">Pending Deletion Requests</h3>
-                    <p className="text-[10px] lg:text-xs text-red-600 font-bold uppercase tracking-widest">
-                      BODs have marked items for deletion. Action required.
-                    </p>
+            {/* Admin Alert for Pending Deletions and Undo/Redo */}
+            {profile?.role === 'admin' && (
+              <div className="flex flex-col gap-4">
+                {(standardDues.some(d => d.pendingDeletion) || records.some(r => r.pendingDeletion)) && (
+                  <div className="bg-red-50 border border-red-100 p-4 rounded-2xl shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <ShieldAlert className="text-red-500 animate-pulse" size={24} />
+                      <div>
+                        <h3 className="text-xs lg:text-sm font-black text-red-800 uppercase tracking-wider">Pending Deletion Requests</h3>
+                        <p className="text-[10px] lg:text-xs text-red-600 font-bold uppercase tracking-widest">
+                          BODs have marked items for deletion. Action required.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={confirmAllDeletions}
+                      className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-700 transition-all shadow-sm whitespace-nowrap"
+                    >
+                      Confirm All Deletions
+                    </button>
                   </div>
-                </div>
+                )}
+                
+                {(undoStack.length > 0 || redoStack.length > 0) && (
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={handleUndo}
+                      disabled={undoStack.length === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    >
+                      <Undo size={14} /> Undo
+                    </button>
+                    <button
+                      onClick={handleRedo}
+                      disabled={redoStack.length === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                    >
+                      <Redo size={14} /> Redo
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -5207,6 +5865,13 @@ function AppContent() {
                   </div>
                   <div className="flex items-center gap-2 md:gap-3 w-full md:w-auto justify-center">
                     <button 
+                      onClick={() => setIsBatchUpdateModalOpen(true)}
+                      className="bg-white text-[#0038A8] px-4 py-2 md:px-6 md:py-2 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2 shrink-0"
+                    >
+                      <CheckCircle size={14} />
+                      Update Dues
+                    </button>
+                    <button 
                       onClick={handleBatchSendReceipts}
                       disabled={isBatchSending}
                       className="bg-white text-[#0038A8] px-4 py-2 md:px-6 md:py-2 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2 disabled:opacity-50 shrink-0"
@@ -5373,6 +6038,18 @@ function AppContent() {
                                       title="Send Receipt"
                                     >
                                       {isSending === record.id ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDownloadReceipt(record)}
+                                      disabled={totalPaid === 0 || record.pendingDeletion}
+                                      className={`p-2 rounded-xl transition-all ${
+                                        (totalPaid === 0 || record.pendingDeletion)
+                                        ? 'text-gray-200 cursor-not-allowed' 
+                                        : 'text-green-600 hover:bg-green-50'
+                                      }`}
+                                      title="Download Receipt"
+                                    >
+                                      <Download size={16} />
                                     </button>
                                     <button 
                                       onClick={() => openEditModal(record)}
@@ -7364,6 +8041,134 @@ function AppContent() {
                   </>
                 ) : (
                   'Confirm Delete'
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {/* Batch Update Dues Modal */}
+      {isBatchUpdateModalOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[70] p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-lg w-full shadow-2xl border border-gray-100 relative max-h-[90vh] overflow-y-auto"
+          >
+            <button 
+              onClick={() => setIsBatchUpdateModalOpen(false)}
+              className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+            >
+              <X size={20} />
+            </button>
+            
+            <div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 text-[#0038A8]">
+              <CheckCircle size={40} />
+            </div>
+            
+            <h3 className="text-2xl font-black text-gray-900 mb-2 text-center">
+              Batch Update Dues
+            </h3>
+            <p className="text-gray-500 font-bold mb-8 leading-relaxed text-center">
+              Update payment status for {selectedTeacherIds.size} selected {selectedTeacherIds.size === 1 ? 'teacher' : 'teachers'}.
+            </p>
+
+            <div className="space-y-4 mb-8 text-left">
+              {standardDues.map(due => (
+                <div key={due.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div>
+                    <p className="font-bold text-gray-900">{due.name}</p>
+                    <p className="text-xs text-gray-500 font-medium">₱{due.amount.toLocaleString()}</p>
+                  </div>
+                  <select
+                    value={batchDueUpdates[due.id] || 'no_change'}
+                    onChange={(e) => setBatchDueUpdates(prev => ({ ...prev, [due.id]: e.target.value as any }))}
+                    className="bg-white border border-gray-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]"
+                  >
+                    <option value="no_change">No Change</option>
+                    <option value="paid">Mark as Paid</option>
+                    <option value="unpaid">Mark as Unpaid</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button 
+                onClick={() => setIsBatchUpdateModalOpen(false)}
+                disabled={isBatchUpdating}
+                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleBatchUpdateDues}
+                disabled={isBatchUpdating || Object.values(batchDueUpdates).every(v => v === 'no_change')}
+                className="flex-1 py-4 bg-[#0038A8] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isBatchUpdating ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  'Apply Updates'
+                )}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {/* Receipt Preview Modal */}
+      {showReceiptPreview && previewReceiptData && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80] p-4">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-2xl w-full shadow-2xl border border-gray-100 relative max-h-[90vh] flex flex-col"
+          >
+            <button 
+              onClick={() => setShowReceiptPreview(false)}
+              className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+            >
+              <X size={20} />
+            </button>
+            
+            <h3 className="text-2xl font-black text-gray-900 mb-6 text-center">Receipt Preview</h3>
+            
+            <div className="flex-1 overflow-auto mb-8 p-4 bg-gray-50 rounded-3xl border border-gray-100 flex justify-center">
+              <div id="receipt-content" className="bg-white shadow-sm" dangerouslySetInnerHTML={{ __html: generateHTMLReceipt(previewReceiptData) }} />
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button 
+                onClick={() => setShowReceiptPreview(false)}
+                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+              >
+                Close
+              </button>
+              <button 
+                onClick={printReceipt}
+                className="flex-1 py-4 bg-purple-50 text-purple-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-purple-100 transition-all flex items-center justify-center gap-2"
+              >
+                <FileText size={16} />
+                Print
+              </button>
+              <button 
+                onClick={downloadReceiptAsDocx}
+                disabled={isDownloadingReceipt}
+                className="flex-1 py-4 bg-[#0038A8] text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDownloadingReceipt ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Generating DOCX...
+                  </>
+                ) : (
+                  <>
+                    <Download size={16} />
+                    Download DOCX
+                  </>
                 )}
               </button>
             </div>
