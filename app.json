@@ -24,8 +24,6 @@
       }
     },
     "plugins": [
-      "expo-camera",
-      "expo-splash-screen",
       [
         "expo-build-properties",
         {

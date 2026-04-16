@@ -5,7 +5,6 @@ on:
   workflow_dispatch:
 
 env:
-  # Supress deprecation warnings and force newer engine
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   NODE_OPTIONS: "--no-deprecation"
 
@@ -28,17 +27,19 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 4. Fix MIME Error (Force Healing Assets)
+      - name: 4. Ensure Assets exist
         run: |
           mkdir -p assets
-          # Remove broken assets if they exist
-          rm -f assets/*.png
-          # Download guaranteed valid placeholder images
-          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
-          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
-          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
-          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/favicon.png -o assets/favicon.png
-          echo "Assets healed and verified."
+          if [ ! -f assets/icon.png ]; then
+            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
+          fi
+          if [ ! -f assets/adaptive-icon.png ]; then
+            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
+          fi
+          if [ ! -f assets/splash.png ]; then
+            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
+          fi
+          echo "Assets ready."
 
       - name: 5. Install App Libraries
         run: npm install --legacy-peer-deps

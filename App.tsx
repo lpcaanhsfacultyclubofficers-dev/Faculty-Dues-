@@ -1,93 +1,49 @@
 import './src/polyfills';
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet, Component } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { 
+  View, 
+  Text, 
+  SafeAreaView, 
+  ScrollView, 
+  TouchableOpacity, 
+  ActivityIndicator, 
+  TextInput, 
+  Alert, 
+  StyleSheet, 
+  Dimensions 
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import * as SplashScreen from 'expo-splash-screen';
 import { useFacultyLogic } from './src/lib/mobileLogic';
-import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X, ShieldAlert } from 'lucide-react-native';
-import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup, signInWithCredential, GoogleAuthProvider, db, doc, setDoc, serverTimestamp } from './src/firebase';
-import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { 
+  Users, 
+  Receipt, 
+  TrendingUp, 
+  CreditCard, 
+  LogIn, 
+  LogOut, 
+  ShieldAlert 
+} from 'lucide-react-native';
+import { 
+  auth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged, 
+  db, 
+  doc, 
+  setDoc, 
+  serverTimestamp 
+} from './src/firebase';
 
-// Keep the splash screen visible while we fetch resources
-SplashScreen.preventAutoHideAsync().catch(() => {});
-
-WebBrowser.maybeCompleteAuthSession();
-
-// Robust Error Boundary for Native
-class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, error: any}> {
-  constructor(props: any) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error: any) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error: any, errorInfo: any) {
-    console.error("Native App Crash:", error, errorInfo);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', bg: '#fef2f2', padding: 30 }}>
-          <ShieldAlert size={60} color="#dc2626" />
-          <Text style={{ fontSize: 24, fontWeight: '900', color: '#111827', marginTop: 20 }}>App Error</Text>
-          <Text style={{ fontSize: 14, color: '#4b5563', textAlign: 'center', marginTop: 10, lineHeight: 20 }}>
-            {this.state.error?.message || "An unexpected error occurred."}
-          </Text>
-          <TouchableOpacity 
-            onPress={() => Alert.alert("Reload", "Please restart the app manually.")}
-            style={{ backgroundColor: '#dc2626', paddingVertical: 15, paddingHorizontal: 30, borderRadius: 15, marginTop: 30 }}
-          >
-            <Text style={{ color: 'white', fontWeight: '800' }}>RETRY</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-    return this.props.children;
-  }
-}
+const { width } = Dimensions.get('window');
 
 export default function App() {
-  return (
-    <ErrorBoundary>
-      <AppInner />
-    </ErrorBoundary>
-  );
-}
-
-function AppInner() {
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [showScanner, setShowScanner] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
-  const [scanned, setScanned] = useState(false);
-  const [scannerHardwareEnabled, setScannerHardwareEnabled] = useState(true);
-
-  // Google Auth Request
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    androidClientId: "YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com",
-    iosClientId: "YOUR_IOS_CLIENT_ID.apps.googleusercontent.com",
-    webClientId: "YOUR_WEB_CLIENT_ID.apps.googleusercontent.com",
-  });
-
-  useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      setLoading(true);
-      signInWithCredential(auth, credential)
-        .catch(error => Alert.alert('Login Error', error.message))
-        .finally(() => setLoading(false));
-    }
-  }, [response]);
-
-  // Handle Auth Readiness
   const [authReady, setAuthReady] = useState(false);
 
   useEffect(() => {
@@ -95,13 +51,11 @@ function AppInner() {
       setUser(u);
       setAuthReady(true);
       setLoading(false);
-      // Once auth is ready (even if null), hide the splash screen
-      SplashScreen.hideAsync().catch(() => {});
     });
     return unsubscribe;
   }, []);
 
-  const { records, stats, actions } = useFacultyLogic(authReady ? user : null, { role: 'admin' });
+  const { records, stats } = useFacultyLogic(authReady ? user : null, { role: 'admin' });
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -112,7 +66,8 @@ function AppInner() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
-      Alert.alert('Login Failed', error.message);
+      Alert.alert('Login Failed', "Check your email/password or internet connection.");
+      console.error(error);
     } finally {
       setLoading(false);
     }
@@ -124,7 +79,6 @@ function AppInner() {
       return;
     }
 
-    // Email validation
     const lowerEmail = email.toLowerCase();
     const isDepEd = lowerEmail.endsWith('@deped.gov.ph');
     const isGmail = lowerEmail.endsWith('@gmail.com');
@@ -139,7 +93,6 @@ function AppInner() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const newUser = userCredential.user;
 
-      // Save to Firestore
       await setDoc(doc(db, 'users', newUser.uid), {
         uid: newUser.uid,
         email: newUser.email,
@@ -148,20 +101,9 @@ function AppInner() {
         createdAt: serverTimestamp(),
       });
 
-      Alert.alert('Success', 'Account created successfully! Welcome to Faculty Club.');
+      Alert.alert('Success', 'Account created successfully!');
     } catch (error: any) {
       Alert.alert('Sign Up Failed', error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    try {
-      await promptAsync();
-    } catch (error: any) {
-      Alert.alert('Google Login Failed', error.message);
     } finally {
       setLoading(false);
     }
@@ -175,276 +117,211 @@ function AppInner() {
     }
   };
 
-  const handleBarCodeScanned = ({ data }: { data: string }) => {
-    setScanned(true);
-    setShowScanner(false);
-    Alert.alert('QR Code Scanned', `Data: ${data}`);
-  };
-
-  const startScanner = async () => {
-    if (!scannerHardwareEnabled) {
-      Alert.alert('Scanner Disabled', 'You have disabled the scanner in troubleshooting settings.');
-      return;
-    }
-
-    if (!permission?.granted) {
-      const res = await requestPermission();
-      if (!res.granted) {
-        Alert.alert('Permission Required', 'Camera permission is needed to scan QR codes.');
-        return;
-      }
-    }
-    setScanned(false);
-    setShowScanner(true);
-  };
-
   if (loading) {
     return (
-      <View className="flex-1 justify-center items-center bg-white">
-        <ActivityIndicator size="large" color="#2563eb" />
-      </View>
-    );
-  }
-
-  if (showScanner) {
-    return (
-      <View className="flex-1 bg-black">
-        <CameraView
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          barcodeScannerSettings={{
-            barcodeTypes: ["qr"],
-          }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <SafeAreaView className="flex-1 justify-between p-6">
-          <TouchableOpacity 
-            onPress={() => setShowScanner(false)}
-            className="self-end bg-white/20 p-3 rounded-full"
-          >
-            <X color="white" size={24} />
-          </TouchableOpacity>
-          <View className="items-center mb-20">
-            <View className="w-64 h-64 border-2 border-white/50 rounded-3xl items-center justify-center">
-              <View className="w-48 h-48 border-2 border-blue-500 rounded-2xl opacity-50" />
-            </View>
-            <Text className="text-white font-bold mt-8 text-lg">Scan Teacher QR Code</Text>
-          </View>
-        </SafeAreaView>
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#C41E3A" />
       </View>
     );
   }
 
   if (!user) {
     return (
-      <SafeAreaView className="flex-1 bg-slate-50 justify-center p-6">
-        <View className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
-          <View className="items-center mb-8">
-            <View className="flex-row items-center mb-2">
-              <Text className="text-6xl font-black text-[#C41E3A]">F</Text>
-              <Text className="text-6xl font-black text-[#1B1F2C] -ml-3">D</Text>
+      <SafeAreaView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.authScroll}>
+          <View style={styles.authCard}>
+            <View style={styles.logoContainer}>
+              <View style={styles.logoBox}>
+                <Text style={styles.logoF}>F</Text>
+                <Text style={styles.logoD}>D</Text>
+              </View>
+              <Text style={styles.appName}>Faculty Club</Text>
+              <Text style={styles.subtitle}>
+                {isSignUp ? 'Teacher Registration' : 'Mobile Access'}
+              </Text>
             </View>
-            <View className="h-1.5 w-24 bg-[#C41E3A] rounded-full mb-4 opacity-20" />
-            <Text className="text-2xl font-black text-slate-900">Faculty Club</Text>
-            <Text className="text-slate-500 font-medium">
-              {isSignUp ? 'Create Teacher Account' : 'Mobile Admin Access'}
-            </Text>
-          </View>
 
-          <View className="space-y-4">
-            {isSignUp && (
-              <View className="mb-4">
-                <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Full Name</Text>
+            <View style={styles.form}>
+              {isSignUp && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>Full Name</Text>
+                  <TextInput 
+                    style={styles.input}
+                    placeholder="Juan Dela Cruz"
+                    value={displayName}
+                    onChangeText={setDisplayName}
+                  />
+                </View>
+              )}
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Email Address</Text>
                 <TextInput 
-                  className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
-                  placeholder="Juan Dela Cruz"
-                  value={displayName}
-                  onChangeText={setDisplayName}
+                  style={styles.input}
+                  placeholder="your@deped.gov.ph"
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
                 />
               </View>
-            )}
-            <View>
-              <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Email Address</Text>
-              <TextInput 
-                className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
-                placeholder={isSignUp ? "your@deped.gov.ph" : "admin@example.com"}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
-            </View>
-            <View className="mt-4">
-              <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Password</Text>
-              <TextInput 
-                className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
-                placeholder="••••••••"
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-              />
-            </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Password</Text>
+                <TextInput 
+                  style={styles.input}
+                  placeholder="••••••••"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                />
+              </View>
 
-            <TouchableOpacity 
-              onPress={isSignUp ? handleSignUp : handleLogin}
-              className="bg-[#1B1F2C] p-4 rounded-xl mt-8 items-center shadow-lg shadow-slate-300"
-            >
-              <Text className="text-white font-black text-lg">
-                {isSignUp ? 'Sign Up' : 'Sign In'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              onPress={() => setIsSignUp(!isSignUp)}
-              className="mt-4 items-center"
-            >
-              <Text className="text-slate-500 font-bold">
-                {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
-              </Text>
-            </TouchableOpacity>
-
-            <View className="flex-row items-center my-6">
-              <View className="flex-1 h-[1px] bg-slate-200" />
-              <Text className="mx-4 text-slate-400 font-bold text-[10px] uppercase">Or continue with</Text>
-              <View className="flex-1 h-[1px] bg-slate-200" />
-            </View>
-
-            <TouchableOpacity 
-              onPress={handleGoogleLogin}
-              className="bg-white p-4 rounded-xl items-center border border-slate-200 flex-row justify-center"
-            >
-              <Text className="text-slate-700 font-bold ml-2">Sign in with Google</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              onPress={startScanner}
-              className="mt-4 flex-row items-center justify-center"
-            >
-              <QrCode size={18} color="#C41E3A" />
-              <Text className="text-[#C41E3A] font-bold ml-2">Login with QR Code</Text>
-            </TouchableOpacity>
-
-            <View className="mt-10 pt-6 border-t border-slate-100">
               <TouchableOpacity 
-                onPress={() => setScannerHardwareEnabled(!scannerHardwareEnabled)}
-                className="flex-row items-center justify-between bg-slate-50 p-3 rounded-xl"
+                onPress={isSignUp ? handleSignUp : handleLogin}
+                style={styles.primaryButton}
               >
-                <View className="flex-row items-center">
-                  <CameraIcon size={16} color={scannerHardwareEnabled ? "#10b981" : "#94a3b8"} />
-                  <Text className="text-[10px] font-bold text-slate-500 uppercase ml-2">
-                    Scanner Hardware: {scannerHardwareEnabled ? "ON" : "OFF"}
-                  </Text>
-                </View>
-                <View className={`w-8 h-4 rounded-full ${scannerHardwareEnabled ? 'bg-emerald-500' : 'bg-slate-300'} justify-center px-1`}>
-                  <View className={`w-2 h-2 bg-white rounded-full ${scannerHardwareEnabled ? 'self-end' : 'self-start'}`} />
-                </View>
+                <Text style={styles.primaryButtonText}>
+                  {isSignUp ? 'CREATE ACCOUNT' : 'LOGIN'}
+                </Text>
               </TouchableOpacity>
-              <Text className="text-[9px] text-slate-400 mt-2 text-center">
-                Turn OFF if the app crashes when opening the scanner.
-              </Text>
+
+              <TouchableOpacity 
+                onPress={() => setIsSignUp(!isSignUp)}
+                style={styles.linkButton}
+              >
+                <Text style={styles.linkText}>
+                  {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!records.length && !stats.totalCollections) {
-    return (
-      <SafeAreaView className="flex-1 bg-white">
-        <View className="flex-1 justify-center items-center p-6">
-          <ActivityIndicator size="large" color="#2563eb" />
-          <Text className="mt-4 text-slate-500 font-medium text-center">
-            Connected as {user.email}{"\n"}
-            Fetching records...
-          </Text>
-          <TouchableOpacity onPress={handleLogout} className="mt-8">
-            <Text className="text-blue-600 font-bold">Sign Out</Text>
-          </TouchableOpacity>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-slate-50">
+    <SafeAreaView style={styles.mainContainer}>
       <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         
-        {/* Header */}
-        <View className="flex-row justify-between items-start mb-6">
+        <View style={styles.header}>
           <View>
-            <Text className="text-xs font-black text-blue-500 uppercase tracking-widest">Faculty Club</Text>
-            <Text className="text-3xl font-black text-slate-900">Welcome,</Text>
-            <Text className="text-xl font-bold text-slate-500">{user.displayName || user.email}</Text>
+            <Text style={styles.headerTag}>SYSTEM ACTIVE</Text>
+            <Text style={styles.welcomeText}>Hello,</Text>
+            <Text style={styles.userText}>{user.displayName || user.email}</Text>
           </View>
-          <TouchableOpacity onPress={handleLogout} className="bg-white p-2 rounded-xl border border-slate-200">
+          <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
             <LogOut size={20} color="#ef4444" />
           </TouchableOpacity>
         </View>
 
-        {/* Balance Card */}
-        <View className="bg-blue-600 p-6 rounded-3xl shadow-xl shadow-blue-200">
-          <Text className="text-blue-100 text-xs font-bold uppercase">Available Funds</Text>
-          <Text className="text-white text-4xl font-black mt-1">₱{stats.netBalance.toLocaleString()}</Text>
+        <View style={styles.balanceCard}>
+          <Text style={styles.balanceLabel}>TOTAL NET BALANCE</Text>
+          <Text style={styles.balanceAmount}>₱{stats.netBalance.toLocaleString()}</Text>
           
-          <View className="flex-row mt-5 pt-5 border-t border-white/10">
-            <View className="flex-1">
-              <Text className="text-blue-200 text-[10px] font-bold uppercase">Collections</Text>
-              <Text className="text-white text-base font-bold">₱{stats.totalCollections.toLocaleString()}</Text>
+          <View style={styles.balanceRow}>
+            <View style={styles.balanceCol}>
+              <Text style={styles.colLabel}>INCOME</Text>
+              <Text style={styles.colVal}>₱{stats.totalCollections.toLocaleString()}</Text>
             </View>
-            <View className="flex-1">
-              <Text className="text-blue-200 text-[10px] font-bold uppercase">Expenses</Text>
-              <Text className="text-white text-base font-bold">₱{stats.totalExpenses.toLocaleString()}</Text>
+            <View style={styles.balanceCol}>
+              <Text style={styles.colLabel}>EXPENSES</Text>
+              <Text style={styles.colVal}>₱{stats.totalExpenses.toLocaleString()}</Text>
             </View>
           </View>
         </View>
 
-        {/* Quick Stats */}
-        <View className="flex-row justify-between mt-6">
-          <View className="bg-white p-4 rounded-2xl w-[48%] border border-slate-100">
+        <View style={styles.statsGrid}>
+          <View style={styles.statBox}>
             <Users size={20} color="#3b82f6" />
-            <Text className="text-xl font-black text-slate-900 mt-2">{records.length}</Text>
-            <Text className="text-[10px] text-slate-500 font-bold uppercase">Total Teachers</Text>
+            <Text style={styles.statNumber}>{records.length}</Text>
+            <Text style={styles.statLabel}>TEACHERS</Text>
           </View>
-          <View className="bg-white p-4 rounded-2xl w-[48%] border border-slate-100">
+          <View style={styles.statBox}>
             <TrendingUp size={20} color="#10b981" />
-            <Text className="text-xl font-black text-slate-900 mt-2">84%</Text>
-            <Text className="text-[10px] text-slate-500 font-bold uppercase">Collection Rate</Text>
+            <Text style={styles.statNumber}>84%</Text>
+            <Text style={styles.statLabel}>RATE</Text>
           </View>
         </View>
 
-        {/* Recent Teachers List */}
-        <View className="mt-8">
-          <View className="flex-row justify-between items-center mb-4">
-            <Text className="text-lg font-black text-slate-900">Teacher Records</Text>
-            <TouchableOpacity>
-              <Text className="text-blue-600 font-bold text-sm">View All</Text>
-            </TouchableOpacity>
-          </View>
-
-          {records.slice(0, 10).map((teacher) => (
-            <TouchableOpacity 
-              key={teacher.id} 
-              className="bg-white p-4 rounded-2xl mb-3 flex-row items-center border border-slate-100"
-            >
-              <View className="w-10 h-10 rounded-xl bg-blue-50 justify-center items-center mr-3">
-                <Text className="text-blue-600 font-black">{teacher.name.charAt(0)}</Text>
+        <View style={styles.listSection}>
+          <Text style={styles.sectionTitle}>Recent Records</Text>
+          {records.length === 0 ? (
+             <View style={styles.emptyContainer}>
+               <ActivityIndicator size="small" color="#94a3b8" />
+               <Text style={styles.emptyText}>Loading records...</Text>
+             </View>
+          ) : (
+            records.slice(0, 10).map((teacher) => (
+              <View key={teacher.id} style={styles.listItem}>
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{teacher.name.charAt(0)}</Text>
+                </View>
+                <View style={styles.itemInfo}>
+                  <Text style={styles.itemName}>{teacher.name}</Text>
+                  <Text style={styles.itemSub}>{teacher.gradeLevel}</Text>
+                </View>
+                <View style={styles.itemEnd}>
+                  <CreditCard size={14} color="#10b981" />
+                  <Text style={styles.itemCheck}>VERIFIED</Text>
+                </View>
               </View>
-              <View className="flex-1">
-                <Text className="text-sm font-bold text-slate-900">{teacher.name}</Text>
-                <Text className="text-[10px] text-slate-500">{teacher.gradeLevel}</Text>
-              </View>
-              <View className="items-end">
-                <Text className={`text-[10px] font-bold ${teacher.paidDueIds.length > 0 ? 'text-emerald-500' : 'text-amber-500'}`}>
-                  {teacher.paidDueIds.length} Paid
-                </Text>
-                <CreditCard size={14} color={teacher.paidDueIds.length > 0 ? '#10b981' : '#f59e0b'} className="mt-1" />
-              </View>
-            </TouchableOpacity>
-          ))}
+            ))
+          )}
         </View>
 
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  authScroll: { flexGrow: 1, justifyContent: 'center', padding: 25 },
+  authCard: { backgroundColor: '#fff', borderRadius: 30, padding: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10, borderWeight: 1, borderColor: '#f1f5f9' },
+  logoContainer: { alignItems: 'center', marginBottom: 30 },
+  logoBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  logoF: { fontSize: 50, fontWeight: '900', color: '#C41E3A' },
+  logoD: { fontSize: 50, fontWeight: '900', color: '#1B1F2C', marginLeft: -2 },
+  appName: { fontSize: 24, fontWeight: '900', color: '#1e293b' },
+  subtitle: { color: '#64748b', fontWeight: '600', marginTop: 5 },
+  form: { marginTop: 10 },
+  inputGroup: { marginBottom: 15 },
+  label: { fontSize: 10, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase', marginBottom: 5, marginLeft: 5 },
+  input: { backgroundColor: '#f1f5f9', padding: 15, borderRadius: 15, color: '#1e293b', fontWeight: '600' },
+  primaryButton: { backgroundColor: '#1B1F2C', padding: 18, borderRadius: 15, marginTop: 25, alignItems: 'center', shadowColor: '#1B1F2C', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 },
+  primaryButtonText: { color: '#fff', fontWeight: '900', fontSize: 16, letterSpacing: 1 },
+  linkButton: { marginTop: 20, alignItems: 'center' },
+  linkText: { color: '#64748b', fontWeight: '700', fontSize: 13 },
+  mainContainer: { flex: 1, backgroundColor: '#f8fafc' },
+  scrollContent: { padding: 20 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 25 },
+  headerTag: { fontSize: 9, fontWeight: '900', color: '#3b82f6', letterSpacing: 2, marginBottom: 5 },
+  welcomeText: { fontSize: 28, fontWeight: '900', color: '#1e293b' },
+  userText: { fontSize: 16, fontWeight: '700', color: '#64748b' },
+  logoutBtn: { backgroundColor: '#fff', padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#f1f5f9' },
+  balanceCard: { backgroundColor: '#1e40af', padding: 25, borderRadius: 25, shadowColor: '#1e40af', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 15, elevation: 8 },
+  balanceLabel: { color: '#93c5fd', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
+  balanceAmount: { color: '#fff', fontSize: 36, fontWeight: '900', marginTop: 5 },
+  balanceRow: { flexDirection: 'row', marginTop: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
+  balanceCol: { flex: 1 },
+  colLabel: { color: '#93c5fd', fontSize: 9, fontWeight: '900' },
+  colVal: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  statsGrid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 },
+  statBox: { backgroundColor: '#fff', padding: 15, borderRadius: 20, width: '48%', borderWeight: 1, borderColor: '#f1f5f9' },
+  statNumber: { fontSize: 20, fontWeight: '900', color: '#1e293b', marginTop: 8 },
+  statLabel: { fontSize: 9, fontWeight: '800', color: '#64748b', marginTop: 2 },
+  listSection: { marginTop: 30 },
+  sectionTitle: { fontSize: 18, fontWeight: '900', color: '#1e293b', marginBottom: 15 },
+  listItem: { backgroundColor: '#fff', padding: 15, borderRadius: 18, marginBottom: 12, flexDirection: 'row', alignItems: 'center', borderWeight: 1, borderColor: '#f1f5f9' },
+  avatar: { width: 40, h: 40, borderRadius: 12, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  avatarText: { color: '#3b82f6', fontWeight: '900' },
+  itemInfo: { flex: 1 },
+  itemName: { fontSize: 14, fontWeight: '700', color: '#1e293b' },
+  itemSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
+  itemEnd: { alignItems: 'flex-end' },
+  itemCheck: { fontSize: 8, fontWeight: '900', color: '#10b981', marginTop: 3 },
+  emptyContainer: { alignItems: 'center', padding: 50 },
+  emptyText: { color: '#94a3b8', fontWeight: '600', marginTop: 15 }
+});
