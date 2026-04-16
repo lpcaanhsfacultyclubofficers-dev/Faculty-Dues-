@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
-import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera, X } from 'lucide-react-native';
+import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X } from 'lucide-react-native';
 import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup } from './src/firebase';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
