@@ -6,7 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
 import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera, X } from 'lucide-react-native';
 import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup } from './src/firebase';
-import { BarCodeScanner } from 'expo-barcode-scanner';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -14,7 +14,7 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
-  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
 
   useEffect(() => {
@@ -23,13 +23,6 @@ export default function App() {
       setLoading(false);
     });
     return unsubscribe;
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      const { status } = await BarCodeScanner.requestPermissionsAsync();
-      setHasPermission(status === 'granted');
-    })();
   }, []);
 
   const { records, stats, actions } = useFacultyLogic(user, { role: 'admin' });
@@ -52,8 +45,6 @@ export default function App() {
   const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      // Note: signInWithPopup works in web/browser. 
-      // For native APK, this might open a browser window.
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
       Alert.alert('Google Login Failed', 'This feature requires a browser. If you are in the app, please use Email/Password for now.');
@@ -70,11 +61,22 @@ export default function App() {
     }
   };
 
-  const handleBarCodeScanned = ({ type, data }: { type: string, data: string }) => {
+  const handleBarCodeScanned = ({ data }: { data: string }) => {
     setScanned(true);
     setShowScanner(false);
     Alert.alert('QR Code Scanned', `Data: ${data}`);
-    // Here you would add logic to handle the scanned data (e.g., login or find teacher)
+  };
+
+  const startScanner = async () => {
+    if (!permission?.granted) {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert('Permission Required', 'Camera permission is needed to scan QR codes.');
+        return;
+      }
+    }
+    setScanned(false);
+    setShowScanner(true);
   };
 
   if (loading) {
@@ -88,8 +90,11 @@ export default function App() {
   if (showScanner) {
     return (
       <View className="flex-1 bg-black">
-        <BarCodeScanner
-          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+        <CameraView
+          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
+          barcodeScannerSettings={{
+            barcodeTypes: ["qr"],
+          }}
           style={StyleSheet.absoluteFillObject}
         />
         <SafeAreaView className="flex-1 justify-between p-6">
@@ -168,7 +173,7 @@ export default function App() {
             </TouchableOpacity>
 
             <TouchableOpacity 
-              onPress={() => setShowScanner(true)}
+              onPress={startScanner}
               className="mt-4 flex-row items-center justify-center"
             >
               <QrCode size={18} color="#C41E3A" />

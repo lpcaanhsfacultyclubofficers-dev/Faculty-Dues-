@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "expo": "~50.0.0",
-    "expo-auth-session": "^55.0.14",
-    "expo-barcode-scanner": "^13.0.1",
-    "expo-crypto": "^55.0.14",
+    "expo-auth-session": "~5.4.0",
+    "expo-camera": "~14.1.1",
+    "expo-crypto": "~12.8.1",
     "expo-status-bar": "~1.11.1",
     "firebase": "^10.7.1",
     "lucide-react-native": "^0.300.0",
