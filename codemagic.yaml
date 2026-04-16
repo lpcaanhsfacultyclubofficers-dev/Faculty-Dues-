@@ -21,7 +21,7 @@ workflows:
           npx expo prebuild --platform android --no-install
       - name: Build Android APK
         script: |
-          cd android && ./gradlew assembleRelease
+          cd android && ./gradlew clean assembleRelease
     artifacts:
       - android/app/build/outputs/apk/release/*.apk
     publishing:

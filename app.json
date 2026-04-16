@@ -5,29 +5,41 @@
     "scheme": "faculty-club-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./mobile-app/assets/icon.png",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.facultyclub.mobile",
+      "icon": "./mobile-app/assets/icon.png"
     },
     "android": {
       "package": "com.facultyclub.mobile",
       "versionCode": 1,
-      "permissions": ["CAMERA"]
+      "permissions": ["CAMERA"],
+      "adaptiveIcon": {
+        "foregroundImage": "./mobile-app/assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
     },
     "plugins": [
       [
         "expo-build-properties",
         {
           "android": {
-            "kotlinVersion": "1.8.10"
+            "kotlinVersion": "1.8.10",
+            "extraMavenRepos": [
+              "https://www.jitpack.io"
+            ]
           }
         }
       ]
     ],
     "splash": {
+      "image": "./mobile-app/assets/splash.png",
+      "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     }
   }
