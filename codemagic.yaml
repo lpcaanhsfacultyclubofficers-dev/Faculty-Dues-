@@ -11,7 +11,7 @@ workflows:
           npm install -g expo-cli
       - name: Install dependencies
         script: |
-          npm install
+          npm install --legacy-peer-deps
       - name: Expo prebuild (Force)
         script: |
           npx expo prebuild --platform android --no-install --non-interactive
