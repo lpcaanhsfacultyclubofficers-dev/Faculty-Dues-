@@ -4,7 +4,7 @@ import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicat
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
 import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X } from 'lucide-react-native';
-import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup, signInWithCredential, GoogleAuthProvider } from './src/firebase';
+import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup, signInWithCredential, GoogleAuthProvider, db, doc, setDoc, serverTimestamp } from './src/firebase';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -28,6 +28,8 @@ function AppInner() {
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -72,6 +74,44 @@ function AppInner() {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
       Alert.alert('Login Failed', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignUp = async () => {
+    if (!email || !password || !displayName) {
+      Alert.alert('Error', 'Please fill in all fields');
+      return;
+    }
+
+    // Email validation
+    const lowerEmail = email.toLowerCase();
+    const isDepEd = lowerEmail.endsWith('@deped.gov.ph');
+    const isGmail = lowerEmail.endsWith('@gmail.com');
+
+    if (!isDepEd && !isGmail) {
+      Alert.alert('Invalid Email', 'Please use your DepEd email (@deped.gov.ph) or a personal Gmail address.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const newUser = userCredential.user;
+
+      // Save to Firestore
+      await setDoc(doc(db, 'users', newUser.uid), {
+        uid: newUser.uid,
+        email: newUser.email,
+        displayName: displayName,
+        role: 'teacher',
+        createdAt: serverTimestamp(),
+      });
+
+      Alert.alert('Success', 'Account created successfully! Welcome to Faculty Club.');
+    } catch (error: any) {
+      Alert.alert('Sign Up Failed', error.message);
     } finally {
       setLoading(false);
     }
@@ -166,15 +206,28 @@ function AppInner() {
             </View>
             <View className="h-1.5 w-24 bg-[#C41E3A] rounded-full mb-4 opacity-20" />
             <Text className="text-2xl font-black text-slate-900">Faculty Club</Text>
-            <Text className="text-slate-500 font-medium">Mobile Admin Access</Text>
+            <Text className="text-slate-500 font-medium">
+              {isSignUp ? 'Create Teacher Account' : 'Mobile Admin Access'}
+            </Text>
           </View>
 
           <View className="space-y-4">
+            {isSignUp && (
+              <View className="mb-4">
+                <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Full Name</Text>
+                <TextInput 
+                  className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
+                  placeholder="Juan Dela Cruz"
+                  value={displayName}
+                  onChangeText={setDisplayName}
+                />
+              </View>
+            )}
             <View>
               <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Email Address</Text>
               <TextInput 
                 className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
-                placeholder="admin@example.com"
+                placeholder={isSignUp ? "your@deped.gov.ph" : "admin@example.com"}
                 value={email}
                 onChangeText={setEmail}
                 autoCapitalize="none"
@@ -193,10 +246,21 @@ function AppInner() {
             </View>
 
             <TouchableOpacity 
-              onPress={handleLogin}
+              onPress={isSignUp ? handleSignUp : handleLogin}
               className="bg-[#1B1F2C] p-4 rounded-xl mt-8 items-center shadow-lg shadow-slate-300"
             >
-              <Text className="text-white font-black text-lg">Sign In</Text>
+              <Text className="text-white font-black text-lg">
+                {isSignUp ? 'Sign Up' : 'Sign In'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              onPress={() => setIsSignUp(!isSignUp)}
+              className="mt-4 items-center"
+            >
+              <Text className="text-slate-500 font-bold">
+                {isSignUp ? 'Already have an account? Sign In' : "Don't have an account? Sign Up"}
+              </Text>
             </TouchableOpacity>
 
             <View className="flex-row items-center my-6">
@@ -271,7 +335,8 @@ function AppInner() {
         <View className="flex-row justify-between items-start mb-6">
           <View>
             <Text className="text-xs font-black text-blue-500 uppercase tracking-widest">Faculty Club</Text>
-            <Text className="text-3xl font-black text-slate-900">Dashboard</Text>
+            <Text className="text-3xl font-black text-slate-900">Welcome,</Text>
+            <Text className="text-xl font-bold text-slate-500">{user.displayName || user.email}</Text>
           </View>
           <TouchableOpacity onPress={handleLogout} className="bg-white p-2 rounded-xl border border-slate-200">
             <LogOut size={20} color="#ef4444" />
