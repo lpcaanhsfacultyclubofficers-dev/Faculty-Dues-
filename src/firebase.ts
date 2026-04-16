@@ -10,7 +10,6 @@ import {
   User, 
   signInWithEmailAndPassword 
 } from 'firebase/auth';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, getDocFromServer, writeBatch } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
