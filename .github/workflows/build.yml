@@ -27,19 +27,17 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 4. Ensure Assets exist
+      - name: 4. Force Heal Corrupted Assets (FIX MIME ERROR)
         run: |
           mkdir -p assets
-          if [ ! -f assets/icon.png ]; then
-            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
-          fi
-          if [ ! -f assets/adaptive-icon.png ]; then
-            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
-          fi
-          if [ ! -f assets/splash.png ]; then
-            curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
-          fi
-          echo "Assets ready."
+          # Force delete existing assets because the uploaded files are corrupt (MIME <null> error)
+          rm -f assets/*.png
+          # Download guaranteed correct files
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/favicon.png -o assets/favicon.png
+          echo "Corrupted assets replaced with valid placeholders."
 
       - name: 5. Install App Libraries
         run: npm install --legacy-peer-deps
