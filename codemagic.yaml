@@ -5,6 +5,8 @@ workflows:
     instance_type: mac_mini_m1
     environment:
       node: 20
+      vars:
+        CI: 1
     scripts:
       - name: Install Expo CLI
         script: |
@@ -14,7 +16,7 @@ workflows:
           npm install --legacy-peer-deps
       - name: Expo prebuild (Force)
         script: |
-          npx expo prebuild --platform android --no-install --non-interactive
+          npx expo prebuild --platform android --no-install
       - name: Build Android APK
         script: |
           cd android && ./gradlew assembleRelease
