@@ -2,6 +2,7 @@
   "expo": {
     "name": "Faculty Club Mobile",
     "slug": "faculty-club-mobile",
+    "scheme": "faculty-club-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",

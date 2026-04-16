@@ -8,7 +8,8 @@ import {
   signOut, 
   onAuthStateChanged, 
   User, 
-  signInWithEmailAndPassword 
+  signInWithEmailAndPassword,
+  signInWithCredential
 } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, getDocs, onSnapshot, query, where, addDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, getDocFromServer, writeBatch } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
