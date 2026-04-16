@@ -13,6 +13,9 @@ import {
   Dimensions 
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as XLSX from 'xlsx';
 import { useFacultyLogic } from './src/lib/mobileLogic';
 import { 
   Users, 
@@ -21,21 +24,26 @@ import {
   CreditCard, 
   LogIn, 
   LogOut, 
-  ShieldAlert 
+  ShieldAlert,
+  Upload,
+  FileSpreadsheet
 } from 'lucide-react-native';
 import { 
   auth, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
+  sendPasswordResetEmail,
   signOut, 
   onAuthStateChanged, 
   db, 
   doc, 
   setDoc, 
-  serverTimestamp 
+  serverTimestamp,
+  writeBatch
 } from './src/firebase';
 
 const { width } = Dimensions.get('window');
+const ADMIN_EMAIL = 'lpcaanhsfacultyclubofficers@gmail.com';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -45,6 +53,7 @@ export default function App() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(true);
   const [authReady, setAuthReady] = useState(false);
+  const [uploadingExcel, setUploadingExcel] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -66,8 +75,7 @@ export default function App() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) {
-      Alert.alert('Login Failed', "Check your email/password or internet connection.");
-      console.error(error);
+      Alert.alert('Login Failed', error.message);
     } finally {
       setLoading(false);
     }
@@ -80,12 +88,16 @@ export default function App() {
     }
 
     const lowerEmail = email.toLowerCase();
-    const isDepEd = lowerEmail.endsWith('@deped.gov.ph');
-    const isGmail = lowerEmail.endsWith('@gmail.com');
+    
+    // Quick allow override for the admin email
+    if (lowerEmail !== ADMIN_EMAIL) {
+      const isDepEd = lowerEmail.endsWith('@deped.gov.ph');
+      const isGmail = lowerEmail.endsWith('@gmail.com');
 
-    if (!isDepEd && !isGmail) {
-      Alert.alert('Invalid Email', 'Please use your DepEd email (@deped.gov.ph) or a personal Gmail address.');
-      return;
+      if (!isDepEd && !isGmail) {
+        Alert.alert('Invalid Email', 'Please use your DepEd email (@deped.gov.ph) or a personal Gmail address.');
+        return;
+      }
     }
 
     setLoading(true);
@@ -93,11 +105,13 @@ export default function App() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const newUser = userCredential.user;
 
+      const role = lowerEmail === ADMIN_EMAIL ? 'admin' : 'teacher';
+
       await setDoc(doc(db, 'users', newUser.uid), {
         uid: newUser.uid,
         email: newUser.email,
         displayName: displayName,
-        role: 'teacher',
+        role: role,
         createdAt: serverTimestamp(),
       });
 
@@ -109,11 +123,83 @@ export default function App() {
     }
   };
 
+  const handleResetPassword = async () => {
+    if (!email) {
+      Alert.alert('Email Required', 'Please enter your email address in the field above to reset your password.');
+      return;
+    }
+    try {
+      await sendPasswordResetEmail(auth, email);
+      Alert.alert('Email Sent', 'Check your inbox for a password reset link.');
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
     } catch (error: any) {
       Alert.alert('Error', error.message);
+    }
+  };
+
+  const handleImportExcel = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'],
+        copyToCacheDirectory: true
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+      
+      setUploadingExcel(true);
+      const fileUri = result.assets[0].uri;
+
+      // Use expo-file-system to read as Base64 for safe binary handling in React Native
+      const base64Data = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      const workbook = XLSX.read(base64Data, { type: 'base64' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet);
+
+      if (jsonData.length === 0) {
+        Alert.alert('Error', 'The Excel file is empty.');
+        setUploadingExcel(false);
+        return;
+      }
+
+      const batch = writeBatch(db);
+      let count = 0;
+
+      for (const row of jsonData) {
+        const name = row['Name'] || row['name'] || row['FULL NAME'] || row['Full Name'] || 'Unknown Teacher';
+        const email = row['Email'] || row['email'] || `${name.replace(/\s+/g, '.').toLowerCase()}@deped.gov.ph`;
+        const grade = row['GradeLevel'] || row['Grade'] || row['grade'] || 'Faculty';
+
+        const userRef = doc(db, 'users', `imported_${Date.now()}_${count}`);
+        batch.set(userRef, {
+          uid: userRef.id,
+          email: email,
+          displayName: name,
+          gradeLevel: grade,
+          role: 'teacher',
+          imported: true,
+          createdAt: serverTimestamp()
+        });
+        count++;
+      }
+
+      await batch.commit();
+      Alert.alert('Import Success', `Successfully imported ${count} teachers from the Excel file.`);
+    } catch (err: any) {
+      console.error(err);
+      Alert.alert('Upload Error', err.message || 'Failed to read file');
+    } finally {
+      setUploadingExcel(false);
     }
   };
 
@@ -184,6 +270,12 @@ export default function App() {
                 </Text>
               </TouchableOpacity>
 
+              {!isSignUp && (
+                <TouchableOpacity onPress={handleResetPassword} style={{marginTop: 15, alignItems: 'center'}}>
+                  <Text style={{color: '#C41E3A', fontSize: 12, fontWeight: '700'}}>Forgot Password?</Text>
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity 
                 onPress={() => setIsSignUp(!isSignUp)}
                 style={styles.linkButton}
@@ -199,6 +291,8 @@ export default function App() {
     );
   }
 
+  const isAdmin = user.email?.toLowerCase() === ADMIN_EMAIL;
+
   return (
     <SafeAreaView style={styles.mainContainer}>
       <StatusBar style="dark" />
@@ -206,7 +300,7 @@ export default function App() {
         
         <View style={styles.header}>
           <View>
-            <Text style={styles.headerTag}>SYSTEM ACTIVE</Text>
+            <Text style={styles.headerTag}>{isAdmin ? 'ADMIN SYSTEM ACTIVE' : 'SYSTEM ACTIVE'}</Text>
             <Text style={styles.welcomeText}>Hello,</Text>
             <Text style={styles.userText}>{user.displayName || user.email}</Text>
           </View>
@@ -214,6 +308,26 @@ export default function App() {
             <LogOut size={20} color="#ef4444" />
           </TouchableOpacity>
         </View>
+
+        {isAdmin && (
+          <TouchableOpacity 
+            onPress={handleImportExcel}
+            style={styles.adminActionBox}
+            disabled={uploadingExcel}
+          >
+            {uploadingExcel ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <FileSpreadsheet color="#fff" size={24} />
+                <View style={{marginLeft: 15, flex: 1}}>
+                  <Text style={{color: '#fff', fontSize: 14, fontWeight: '800'}}>Import Teachers via Excel</Text>
+                  <Text style={{color: '#dbeafe', fontSize: 10, marginTop: 2}}>Upload a .xlsx file to bulk create users</Text>
+                </View>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
 
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>TOTAL NET BALANCE</Text>
@@ -259,7 +373,7 @@ export default function App() {
                 </View>
                 <View style={styles.itemInfo}>
                   <Text style={styles.itemName}>{teacher.name}</Text>
-                  <Text style={styles.itemSub}>{teacher.gradeLevel}</Text>
+                  <Text style={styles.itemSub}>{teacher.gradeLevel || teacher.email}</Text>
                 </View>
                 <View style={styles.itemEnd}>
                   <CreditCard size={14} color="#10b981" />
@@ -279,7 +393,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
   container: { flex: 1, backgroundColor: '#f8fafc' },
   authScroll: { flexGrow: 1, justifyContent: 'center', padding: 25 },
-  authCard: { backgroundColor: '#fff', borderRadius: 30, padding: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10, borderWeight: 1, borderColor: '#f1f5f9' },
+  authCard: { backgroundColor: '#fff', borderRadius: 30, padding: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 10, borderWidth: 1, borderColor: '#f1f5f9' },
   logoContainer: { alignItems: 'center', marginBottom: 30 },
   logoBox: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   logoF: { fontSize: 50, fontWeight: '900', color: '#C41E3A' },
@@ -301,6 +415,7 @@ const styles = StyleSheet.create({
   welcomeText: { fontSize: 28, fontWeight: '900', color: '#1e293b' },
   userText: { fontSize: 16, fontWeight: '700', color: '#64748b' },
   logoutBtn: { backgroundColor: '#fff', padding: 10, borderRadius: 12, borderWidth: 1, borderColor: '#f1f5f9' },
+  adminActionBox: { backgroundColor: '#3b82f6', padding: 15, borderRadius: 20, marginBottom: 20, flexDirection: 'row', alignItems: 'center', shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.3, shadowRadius: 10, elevation: 6 },
   balanceCard: { backgroundColor: '#1e40af', padding: 25, borderRadius: 25, shadowColor: '#1e40af', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 15, elevation: 8 },
   balanceLabel: { color: '#93c5fd', fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   balanceAmount: { color: '#fff', fontSize: 36, fontWeight: '900', marginTop: 5 },
@@ -309,13 +424,13 @@ const styles = StyleSheet.create({
   colLabel: { color: '#93c5fd', fontSize: 9, fontWeight: '900' },
   colVal: { color: '#fff', fontSize: 16, fontWeight: '700' },
   statsGrid: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 20 },
-  statBox: { backgroundColor: '#fff', padding: 15, borderRadius: 20, width: '48%', borderWeight: 1, borderColor: '#f1f5f9' },
+  statBox: { backgroundColor: '#fff', padding: 15, borderRadius: 20, width: '48%', borderWidth: 1, borderColor: '#f1f5f9' },
   statNumber: { fontSize: 20, fontWeight: '900', color: '#1e293b', marginTop: 8 },
   statLabel: { fontSize: 9, fontWeight: '800', color: '#64748b', marginTop: 2 },
   listSection: { marginTop: 30 },
   sectionTitle: { fontSize: 18, fontWeight: '900', color: '#1e293b', marginBottom: 15 },
-  listItem: { backgroundColor: '#fff', padding: 15, borderRadius: 18, marginBottom: 12, flexDirection: 'row', alignItems: 'center', borderWeight: 1, borderColor: '#f1f5f9' },
-  avatar: { width: 40, h: 40, borderRadius: 12, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  listItem: { backgroundColor: '#fff', padding: 15, borderRadius: 18, marginBottom: 12, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#f1f5f9' },
+  avatar: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#eff6ff', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
   avatarText: { color: '#3b82f6', fontWeight: '900' },
   itemInfo: { flex: 1 },
   itemName: { fontSize: 14, fontWeight: '700', color: '#1e293b' },

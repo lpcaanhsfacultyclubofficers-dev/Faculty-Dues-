@@ -17,11 +17,7 @@
     "android": {
       "package": "com.facultyclub.mobile",
       "versionCode": 1,
-      "permissions": ["CAMERA"],
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
-      }
+      "permissions": ["CAMERA"]
     },
     "plugins": [
       [
@@ -34,12 +30,8 @@
             ]
           }
         }
-      ]
-    ],
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#FFFFFF"
-    }
+      ],
+      "expo-document-picker"
+    ]
   }
 }
