@@ -1,13 +1,17 @@
 import './src/polyfills';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet, Component } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import * as SplashScreen from 'expo-splash-screen';
 import { useFacultyLogic } from './src/lib/mobileLogic';
 import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X, ShieldAlert } from 'lucide-react-native';
 import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup, signInWithCredential, GoogleAuthProvider, db, doc, setDoc, serverTimestamp } from './src/firebase';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+
+// Keep the splash screen visible while we fetch resources
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -91,6 +95,8 @@ function AppInner() {
       setUser(u);
       setAuthReady(true);
       setLoading(false);
+      // Once auth is ready (even if null), hide the splash screen
+      SplashScreen.hideAsync().catch(() => {});
     });
     return unsubscribe;
   }, []);

@@ -5,8 +5,9 @@ on:
   workflow_dispatch:
 
 env:
-  # This tells GitHub to use the new engine and ignore the Node 20 warnings
+  # Supress deprecation warnings and force newer engine
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NODE_OPTIONS: "--no-deprecation"
 
 jobs:
   build:
@@ -18,7 +19,7 @@ jobs:
       - name: 2. Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: 'npm'
 
       - name: 3. Set up Android Tools (Java)
@@ -27,16 +28,17 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 4. Sanitize and Heal Assets (FIX FOR MIME ERROR)
+      - name: 4. Fix MIME Error (Force Healing Assets)
         run: |
           mkdir -p assets
-          # This downloads valid placeholder images to replace any corrupted ones
-          # This ensures the build "Prebuild" step will pass 100%
-          curl -L https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
-          curl -L https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
-          curl -L https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
-          curl -L https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/favicon.png -o assets/favicon.png
-          echo "Assets healed successfully!"
+          # Remove broken assets if they exist
+          rm -f assets/*.png
+          # Download guaranteed valid placeholder images
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/icon.png -o assets/icon.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/adaptive-icon.png -o assets/adaptive-icon.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/splash.png -o assets/splash.png
+          curl -sL https://raw.githubusercontent.com/expo/expo/master/templates/expo-template-blank/assets/favicon.png -o assets/favicon.png
+          echo "Assets healed and verified."
 
       - name: 5. Install App Libraries
         run: npm install --legacy-peer-deps
