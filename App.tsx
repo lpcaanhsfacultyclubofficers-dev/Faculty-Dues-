@@ -1,9 +1,9 @@
 import './src/polyfills';
 import React, { useState, useEffect } from 'react';
-import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet } from 'react-native';
+import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet, Component } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
-import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X } from 'lucide-react-native';
+import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X, ShieldAlert } from 'lucide-react-native';
 import { auth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup, signInWithCredential, GoogleAuthProvider, db, doc, setDoc, serverTimestamp } from './src/firebase';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
@@ -11,17 +11,46 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export default function App() {
-  try {
-    return <AppInner />;
-  } catch (e) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-        <Text style={{ fontSize: 18, fontWeight: 'bold', color: 'red' }}>App Error</Text>
-        <Text style={{ marginTop: 10, textAlign: 'center' }}>{String(e)}</Text>
-      </View>
-    );
+// Robust Error Boundary for Native
+class ErrorBoundary extends Component<{children: React.ReactNode}, {hasError: boolean, error: any}> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
   }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Native App Crash:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', bg: '#fef2f2', padding: 30 }}>
+          <ShieldAlert size={60} color="#dc2626" />
+          <Text style={{ fontSize: 24, fontWeight: '900', color: '#111827', marginTop: 20 }}>App Error</Text>
+          <Text style={{ fontSize: 14, color: '#4b5563', textAlign: 'center', marginTop: 10, lineHeight: 20 }}>
+            {this.state.error?.message || "An unexpected error occurred."}
+          </Text>
+          <TouchableOpacity 
+            onPress={() => Alert.alert("Reload", "Please restart the app manually.")}
+            style={{ backgroundColor: '#dc2626', paddingVertical: 15, paddingHorizontal: 30, borderRadius: 15, marginTop: 30 }}
+          >
+            <Text style={{ color: 'white', fontWeight: '800' }}>RETRY</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppInner />
+    </ErrorBoundary>
+  );
 }
 
 function AppInner() {
@@ -54,15 +83,19 @@ function AppInner() {
     }
   }, [response]);
 
+  // Handle Auth Readiness
+  const [authReady, setAuthReady] = useState(false);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      setAuthReady(true);
       setLoading(false);
     });
     return unsubscribe;
   }, []);
 
-  const { records, stats, actions } = useFacultyLogic(user, { role: 'admin' });
+  const { records, stats, actions } = useFacultyLogic(authReady ? user : null, { role: 'admin' });
 
   const handleLogin = async () => {
     if (!email || !password) {

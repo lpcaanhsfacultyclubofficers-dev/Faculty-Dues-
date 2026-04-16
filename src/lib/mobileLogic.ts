@@ -42,23 +42,23 @@ export function useFacultyLogic(user: any, profile: any) {
 
     const unsubDues = onSnapshot(collection(db, 'dues'), (snapshot) => {
       setStandardDues(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as StandardDue)));
-    });
+    }, (error) => console.error("Dues Listener Error:", error));
 
     const unsubTeachers = onSnapshot(collection(db, 'teachers'), (snapshot) => {
       setRecords(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as TeacherRecord)));
-    });
+    }, (error) => console.error("Teachers Listener Error:", error));
 
     const unsubRemit = onSnapshot(collection(db, 'remittances'), (snapshot) => {
       setRemittances(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    }, (error) => console.error("Remittances Listener Error:", error));
 
     const unsubExp = onSnapshot(collection(db, 'expenses'), (snapshot) => {
       setExpenses(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    }, (error) => console.error("Expenses Listener Error:", error));
 
     const unsubBal = onSnapshot(collection(db, 'initialBalances'), (snapshot) => {
       setInitialBalances(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
+    }, (error) => console.error("Initial Balances Listener Error:", error));
 
     return () => {
       unsubDues();
