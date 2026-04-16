@@ -1,20 +1,32 @@
-import 'react-native-get-random-values';
-import 'react-native-url-polyfill/auto';
+import './src/polyfills';
 import React, { useState, useEffect } from 'react';
 import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
 import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera as CameraIcon, X } from 'lucide-react-native';
 import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup } from './src/firebase';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+// import { CameraView, useCameraPermissions } from 'expo-camera';
 
 export default function App() {
+  try {
+    return <AppInner />;
+  } catch (e) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <Text style={{ fontSize: 18, fontWeight: 'bold', color: 'red' }}>App Error</Text>
+        <Text style={{ marginTop: 10, textAlign: 'center' }}>{String(e)}</Text>
+      </View>
+    );
+  }
+}
+
+function AppInner() {
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
-  const [permission, requestPermission] = useCameraPermissions();
+  // const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
 
   useEffect(() => {
@@ -68,6 +80,8 @@ export default function App() {
   };
 
   const startScanner = async () => {
+    Alert.alert('Scanner Disabled', 'The scanner is temporarily disabled for troubleshooting.');
+    /*
     if (!permission?.granted) {
       const res = await requestPermission();
       if (!res.granted) {
@@ -77,6 +91,7 @@ export default function App() {
     }
     setScanned(false);
     setShowScanner(true);
+    */
   };
 
   if (loading) {
@@ -89,28 +104,11 @@ export default function App() {
 
   if (showScanner) {
     return (
-      <View className="flex-1 bg-black">
-        <CameraView
-          onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-          barcodeScannerSettings={{
-            barcodeTypes: ["qr"],
-          }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <SafeAreaView className="flex-1 justify-between p-6">
-          <TouchableOpacity 
-            onPress={() => setShowScanner(false)}
-            className="self-end bg-white/20 p-3 rounded-full"
-          >
-            <X color="white" size={24} />
-          </TouchableOpacity>
-          <View className="items-center mb-20">
-            <View className="w-64 h-64 border-2 border-white/50 rounded-3xl items-center justify-center">
-              <View className="w-48 h-48 border-2 border-blue-500 rounded-2xl opacity-50" />
-            </View>
-            <Text className="text-white font-bold mt-8 text-lg">Scan Teacher QR Code</Text>
-          </View>
-        </SafeAreaView>
+      <View className="flex-1 bg-black justify-center items-center">
+        <Text className="text-white">Scanner is temporarily disabled.</Text>
+        <TouchableOpacity onPress={() => setShowScanner(false)} className="mt-4 bg-white p-4 rounded-xl">
+          <Text>Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
