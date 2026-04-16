@@ -1,22 +1,120 @@
 import 'react-native-get-random-values';
 import 'react-native-url-polyfill/auto';
-import React from 'react';
-import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
-import { Users, Receipt, TrendingUp, CreditCard } from 'lucide-react-native';
+import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut } from 'lucide-react-native';
+import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from './src/firebase';
 
 export default function App() {
-  // In a real app, you'd handle login here. 
-  // For now, we'll assume a logged-in state to show the UI.
-  const { records, stats, actions } = useFacultyLogic({ uid: 'demo' }, { role: 'admin' });
+  const [user, setUser] = useState<any>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  if (!records.length && !stats.totalCollections) {
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  const { records, stats, actions } = useFacultyLogic(user, { role: 'admin' });
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Error', 'Please enter email and password');
+      return;
+    }
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (error: any) {
+      Alert.alert('Login Failed', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error: any) {
+      Alert.alert('Error', error.message);
+    }
+  };
+
+  if (loading) {
     return (
       <View className="flex-1 justify-center items-center bg-white">
         <ActivityIndicator size="large" color="#2563eb" />
-        <Text className="mt-4 text-slate-500 font-medium">Connecting to Faculty Database...</Text>
       </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <SafeAreaView className="flex-1 bg-slate-50 justify-center p-6">
+        <View className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
+          <View className="items-center mb-8">
+            <View className="w-16 h-16 bg-blue-600 rounded-2xl items-center justify-center mb-4">
+              <LogIn color="white" size={32} />
+            </View>
+            <Text className="text-2xl font-black text-slate-900">Faculty Club</Text>
+            <Text className="text-slate-500 font-medium">Mobile Admin Access</Text>
+          </View>
+
+          <View className="space-y-4">
+            <View>
+              <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Email Address</Text>
+              <TextInput 
+                className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
+                placeholder="admin@example.com"
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+            </View>
+            <View className="mt-4">
+              <Text className="text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Password</Text>
+              <TextInput 
+                className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-900"
+                placeholder="••••••••"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry
+              />
+            </View>
+
+            <TouchableOpacity 
+              onPress={handleLogin}
+              className="bg-blue-600 p-4 rounded-xl mt-8 items-center shadow-lg shadow-blue-200"
+            >
+              <Text className="text-white font-black text-lg">Sign In</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!records.length && !stats.totalCollections) {
+    return (
+      <SafeAreaView className="flex-1 bg-white">
+        <View className="flex-1 justify-center items-center p-6">
+          <ActivityIndicator size="large" color="#2563eb" />
+          <Text className="mt-4 text-slate-500 font-medium text-center">
+            Connected as {user.email}{"\n"}
+            Fetching records...
+          </Text>
+          <TouchableOpacity onPress={handleLogout} className="mt-8">
+            <Text className="text-blue-600 font-bold">Sign Out</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
@@ -26,9 +124,14 @@ export default function App() {
       <ScrollView contentContainerStyle={{ padding: 20 }}>
         
         {/* Header */}
-        <View className="mb-6">
-          <Text className="text-xs font-black text-blue-500 uppercase tracking-widest">Faculty Club</Text>
-          <Text className="text-3xl font-black text-slate-900">Dashboard</Text>
+        <View className="flex-row justify-between items-start mb-6">
+          <View>
+            <Text className="text-xs font-black text-blue-500 uppercase tracking-widest">Faculty Club</Text>
+            <Text className="text-3xl font-black text-slate-900">Dashboard</Text>
+          </View>
+          <TouchableOpacity onPress={handleLogout} className="bg-white p-2 rounded-xl border border-slate-200">
+            <LogOut size={20} color="#ef4444" />
+          </TouchableOpacity>
         </View>
 
         {/* Balance Card */}
