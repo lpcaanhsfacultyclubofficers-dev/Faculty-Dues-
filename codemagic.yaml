@@ -18,7 +18,7 @@ workflows:
       - name: Expo prebuild (Force)
         script: |
           rm -rf android
-          npx expo prebuild --platform android --no-install
+          npx expo prebuild --platform android
       - name: Build Android APK
         script: |
           cd android && ./gradlew clean assembleRelease

@@ -5,24 +5,18 @@
     "scheme": "faculty-club-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./mobile-app/assets/icon.png",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": [
       "**/*"
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.facultyclub.mobile",
-      "icon": "./mobile-app/assets/icon.png"
+      "bundleIdentifier": "com.facultyclub.mobile"
     },
     "android": {
       "package": "com.facultyclub.mobile",
       "versionCode": 1,
-      "permissions": ["CAMERA"],
-      "adaptiveIcon": {
-        "foregroundImage": "./mobile-app/assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      }
+      "permissions": ["CAMERA"]
     },
     "plugins": [
       [
@@ -38,8 +32,6 @@
       ]
     ],
     "splash": {
-      "image": "./mobile-app/assets/splash.png",
-      "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     }
   }
