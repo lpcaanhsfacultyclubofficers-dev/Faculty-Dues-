@@ -115,9 +115,11 @@ export default function App() {
       <SafeAreaView className="flex-1 bg-slate-50 justify-center p-6">
         <View className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100">
           <View className="items-center mb-8">
-            <View className="w-16 h-16 bg-blue-600 rounded-2xl items-center justify-center mb-4">
-              <LogIn color="white" size={32} />
+            <View className="flex-row items-center mb-2">
+              <Text className="text-6xl font-black text-[#C41E3A]">F</Text>
+              <Text className="text-6xl font-black text-[#1B1F2C] -ml-3">D</Text>
             </View>
+            <View className="h-1.5 w-24 bg-[#C41E3A] rounded-full mb-4 opacity-20" />
             <Text className="text-2xl font-black text-slate-900">Faculty Club</Text>
             <Text className="text-slate-500 font-medium">Mobile Admin Access</Text>
           </View>
@@ -147,7 +149,7 @@ export default function App() {
 
             <TouchableOpacity 
               onPress={handleLogin}
-              className="bg-blue-600 p-4 rounded-xl mt-8 items-center shadow-lg shadow-blue-200"
+              className="bg-[#1B1F2C] p-4 rounded-xl mt-8 items-center shadow-lg shadow-slate-300"
             >
               <Text className="text-white font-black text-lg">Sign In</Text>
             </TouchableOpacity>
@@ -169,8 +171,8 @@ export default function App() {
               onPress={() => setShowScanner(true)}
               className="mt-4 flex-row items-center justify-center"
             >
-              <QrCode size={18} color="#2563eb" />
-              <Text className="text-blue-600 font-bold ml-2">Login with QR Code</Text>
+              <QrCode size={18} color="#C41E3A" />
+              <Text className="text-[#C41E3A] font-bold ml-2">Login with QR Code</Text>
             </TouchableOpacity>
           </View>
         </View>
