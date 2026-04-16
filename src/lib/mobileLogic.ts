@@ -4,7 +4,7 @@ import {
   db, auth, 
   collection, doc, onSnapshot, query, where, 
   updateDoc, deleteDoc, addDoc, serverTimestamp, writeBatch 
-} from './firebase'; // Adjust this path in Expo to your firebase config
+} from '../firebase'; // Adjust this path in Expo to your firebase config
 
 // --- Types ---
 export type GradeLevel = 'Grade 7' | 'Grade 8' | 'Grade 9' | 'Grade 10';
