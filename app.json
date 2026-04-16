@@ -12,8 +12,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.facultyclub.mobile",
-      "icon": "./assets/icon.png"
+      "bundleIdentifier": "com.facultyclub.mobile"
     },
     "android": {
       "package": "com.facultyclub.mobile",
@@ -21,7 +20,7 @@
       "permissions": ["CAMERA"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#FFFFFF"
       }
     },
     "plugins": [
@@ -40,7 +39,7 @@
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#FFFFFF"
     }
   }
 }
