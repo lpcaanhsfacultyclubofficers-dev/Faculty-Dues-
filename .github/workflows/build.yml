@@ -1,8 +1,12 @@
-name: Build Android APK
+   name: Build Android APK
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # This adds a "Run workflow" button for manual builds
+  workflow_dispatch:
+
+# Fix for the Node.js 20 deprecation warning
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -14,7 +18,7 @@ jobs:
       - name: 2. Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22 # Updated to Node 22 for stability
           cache: 'npm'
 
       - name: 3. Set up Android Tools (Java)
