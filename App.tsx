@@ -1,17 +1,21 @@
 import 'react-native-get-random-values';
 import 'react-native-url-polyfill/auto';
 import React, { useState, useEffect } from 'react';
-import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert } from 'react-native';
+import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Alert, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFacultyLogic } from './src/lib/mobileLogic';
-import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut } from 'lucide-react-native';
-import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from './src/firebase';
+import { Users, Receipt, TrendingUp, CreditCard, LogIn, LogOut, QrCode, Camera, X } from 'lucide-react-native';
+import { auth, signInWithEmailAndPassword, signOut, onAuthStateChanged, googleProvider, signInWithPopup } from './src/firebase';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showScanner, setShowScanner] = useState(false);
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [scanned, setScanned] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -19,6 +23,13 @@ export default function App() {
       setLoading(false);
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+    })();
   }, []);
 
   const { records, stats, actions } = useFacultyLogic(user, { role: 'admin' });
@@ -38,6 +49,19 @@ export default function App() {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    try {
+      // Note: signInWithPopup works in web/browser. 
+      // For native APK, this might open a browser window.
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      Alert.alert('Google Login Failed', 'This feature requires a browser. If you are in the app, please use Email/Password for now.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -46,10 +70,42 @@ export default function App() {
     }
   };
 
+  const handleBarCodeScanned = ({ type, data }: { type: string, data: string }) => {
+    setScanned(true);
+    setShowScanner(false);
+    Alert.alert('QR Code Scanned', `Data: ${data}`);
+    // Here you would add logic to handle the scanned data (e.g., login or find teacher)
+  };
+
   if (loading) {
     return (
       <View className="flex-1 justify-center items-center bg-white">
         <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
+
+  if (showScanner) {
+    return (
+      <View className="flex-1 bg-black">
+        <BarCodeScanner
+          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <SafeAreaView className="flex-1 justify-between p-6">
+          <TouchableOpacity 
+            onPress={() => setShowScanner(false)}
+            className="self-end bg-white/20 p-3 rounded-full"
+          >
+            <X color="white" size={24} />
+          </TouchableOpacity>
+          <View className="items-center mb-20">
+            <View className="w-64 h-64 border-2 border-white/50 rounded-3xl items-center justify-center">
+              <View className="w-48 h-48 border-2 border-blue-500 rounded-2xl opacity-50" />
+            </View>
+            <Text className="text-white font-bold mt-8 text-lg">Scan Teacher QR Code</Text>
+          </View>
+        </SafeAreaView>
       </View>
     );
   }
@@ -94,6 +150,27 @@ export default function App() {
               className="bg-blue-600 p-4 rounded-xl mt-8 items-center shadow-lg shadow-blue-200"
             >
               <Text className="text-white font-black text-lg">Sign In</Text>
+            </TouchableOpacity>
+
+            <View className="flex-row items-center my-6">
+              <View className="flex-1 h-[1px] bg-slate-200" />
+              <Text className="mx-4 text-slate-400 font-bold text-[10px] uppercase">Or continue with</Text>
+              <View className="flex-1 h-[1px] bg-slate-200" />
+            </View>
+
+            <TouchableOpacity 
+              onPress={handleGoogleLogin}
+              className="bg-white p-4 rounded-xl items-center border border-slate-200 flex-row justify-center"
+            >
+              <Text className="text-slate-700 font-bold ml-2">Sign in with Google</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              onPress={() => setShowScanner(true)}
+              className="mt-4 flex-row items-center justify-center"
+            >
+              <QrCode size={18} color="#2563eb" />
+              <Text className="text-blue-600 font-bold ml-2">Login with QR Code</Text>
             </TouchableOpacity>
           </View>
         </View>
