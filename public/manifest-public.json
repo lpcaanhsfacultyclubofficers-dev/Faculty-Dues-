@@ -1,0 +1,23 @@
+{
+  "name": "Faculty Club",
+  "short_name": "Faculty Dues",
+  "description": "Faculty Club Dues Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#001233",
+  "theme_color": "#0038A8",
+  "icons": [
+    {
+      "src": "https://n.uguu.se/lYaBaGhS.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://h.uguu.se/bkaqvJMx.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

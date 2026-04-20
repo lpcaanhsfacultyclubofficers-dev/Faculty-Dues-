@@ -1,0 +1,62 @@
+491:  const [standardDues, setStandardDues] = useState<StandardDue[]>([]);
+584:      const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
+590:  }, [records, standardDues]);
+605:    return standardDues.filter(d => !d.isVoluntary);
+606:  }, [standardDues]);
+619:    return standardDues.reduce((sum, d) => sum + d.amount, 0);
+620:  }, [standardDues]);
+680:        const totalPaid = standardDues
+688:        const requiredDues = standardDues.filter(d => !d.isVoluntary);
+699:  }, [records, searchQuery, selectedGrade, paymentFilter, standardDues]);
+1543:    const duesToDelete = standardDues.filter(d => d.pendingDeletion);
+1624:        const due = standardDues.find(d => d.id === id);
+1751:      const due = standardDues.find(d => d.id === dueId);
+1775:    const due = standardDues.find(d => d.id === dueId);
+2020:      const newlyPaidDues = standardDues.filter(d => r.paidDueIds.includes(d.id) && !remittedIds.includes(d.id));
+2068:        standardDues.length > 0 && standardDues.every(d => t.paidDueIds.includes(d.id))
+2593:      standardDues.forEach(due => {
+2606:      const totalPaid = standardDues
+2615:      const totalRequired = standardDues.filter(d => !d.isVoluntary).reduce((sum, d) => sum + d.amount, 0);
+2629:    standardDues.forEach(due => {
+2652:    const pendingDues = standardDues.filter(d => !teacher.paidDueIds.includes(d.id) && !d.isVoluntary);
+2854:               const due = standardDues.find(d => d.id === h.dueId);
+3005:            ...standardDues.map(due => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: due.name.toUpperCase(), bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } })),
+3014:        const paid = standardDues.filter(d => r.paidDueIds.includes(d.id)).reduce((s, d) => {
+3018:        const totalReq = standardDues.filter(d => !d.isVoluntary).reduce((s, d) => s + d.amount, 0);
+3022:        const dueCells = standardDues.map(due => {
+3365:    const paidDues = standardDues.filter(d => record.paidDueIds.includes(d.id));
+3366:    const collectiblesDues = standardDues.filter(d => !record.paidDueIds.includes(d.id) && !d.isVoluntary);
+3377:    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+3391:        const due = standardDues.find(d => d.id === h.dueId);
+3445:    const paidDues = standardDues.filter(d => safePaidDueIds.includes(d.id));
+3446:    const collectiblesDues = standardDues.filter(d => !safePaidDueIds.includes(d.id) && !d.isVoluntary);
+3460:    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+3474:        const due = standardDues.find(d => d.id === h.dueId);
+3832:            const due = standardDues.find(d => d.id === dueId);
+4445:    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+4607:                {standardDues.filter(d => d.isVoluntary && teacherRecord?.paidDueIds.includes(d.id)).length} Paid
+4655:                      {standardDues.map(due => {
+4714:                          const due = standardDues.find(d => d.id === payment.dueId);
+5279:                          {standardDues.length} {standardDues.length === 1 ? 'Item' : 'Items'}
+5498:                        const requiredDues = standardDues.filter(d => !d.isVoluntary);
+5507:                      const requiredDues = standardDues.filter(d => !d.isVoluntary);
+5523:                        const requiredDues = standardDues.filter(d => !d.isVoluntary);
+5525:                        const totalPaid = standardDues.filter(d => r.paidDueIds.includes(d.id)).length;
+5534:                      const requiredDues = standardDues.filter(d => !d.isVoluntary);
+5536:                      const totalPaid = standardDues.filter(d => r.paidDueIds.includes(d.id)).length;
+5566:                {(standardDues.some(d => d.pendingDeletion) || records.some(r => r.pendingDeletion)) && (
+5666:                  {standardDues.length === 0 ? (
+5675:                      {standardDues.map(due => (
+6006:                              const totalPaid = standardDues
+6014:                              const currentBalance = standardDues
+6164:                                      {standardDues.map(due => {
+6225:                          const totalPaid = standardDues
+6233:                          const currentBalance = standardDues
+6349:                                    {standardDues.map(due => {
+6784:                      const newlyPaidDues = standardDues.filter(d => r.paidDueIds.includes(d.id) && !remittedIds.includes(d.id));
+7009:                  const paidDues = standardDues.filter(d => r.paidDueIds.includes(d.id));
+7012:                const totalCollectibles = gradeTeachers.length * standardDues.reduce((sum, d) => sum + d.amount, 0);
+7013:                const fullyPaidCount = gradeTeachers.filter(r => r.paidDueIds.length === standardDues.length).length;
+7070:                  {standardDues.map(due => {
+7918:              Enter the amount for <span className="text-[#0038A8] font-bold">{standardDues.find(d => d.id === voluntaryPaymentData.dueId)?.name}</span>
+8266:              {standardDues.map(due => (

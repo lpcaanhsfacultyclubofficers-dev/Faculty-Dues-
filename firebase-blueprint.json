@@ -1,0 +1,153 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user (BOD or Admin)",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "bod"] },
+        "gradeLevel": { "type": "string", "enum": ["Grade 7", "Grade 8", "Grade 9", "Grade 10", "All"] },
+        "name": { "type": "string" }
+      },
+      "required": ["email", "role"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "Teacher record for dues collection",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "gender": { "type": "string", "enum": ["Male", "Female"] },
+        "contactNumber": { "type": "string" },
+        "gradeLevel": { "type": "string", "enum": ["Grade 7", "Grade 8", "Grade 9", "Grade 10"] },
+        "paidDueIds": { "type": "array", "items": { "type": "string" } },
+        "lastReceiptSent": { "type": "string", "format": "date-time" },
+        "remitted": { "type": "boolean" },
+        "remittanceId": { "type": "string" },
+        "remittedDueIds": { "type": "array", "items": { "type": "string" } },
+        "lastReferenceNumber": { "type": "string" },
+        "pendingDeletion": { "type": "boolean" },
+        "deletionRequestedBy": { "type": "string" },
+        "paymentHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dueId": { "type": "string" },
+              "amount": { "type": "number" },
+              "date": { "type": "string", "format": "date-time" },
+              "collector": { "type": "string" }
+            },
+            "required": ["dueId", "amount", "date", "collector"]
+          }
+        }
+      },
+      "required": ["name", "email", "gradeLevel"]
+    },
+    "Due": {
+      "title": "Due",
+      "description": "A standard faculty due/fee",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "amount": { "type": "number" },
+        "pendingDeletion": { "type": "boolean" },
+        "deletionRequestedBy": { "type": "string" }
+      },
+      "required": ["name", "amount"]
+    },
+    "Remittance": {
+      "title": "Remittance",
+      "description": "A remittance record from BOD to Treasurer",
+      "type": "object",
+      "properties": {
+        "bodId": { "type": "string" },
+        "bodName": { "type": "string" },
+        "bodEmail": { "type": "string" },
+        "gradeLevel": { "type": "string" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "verified"] },
+        "teacherIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["bodId", "amount", "timestamp", "status"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "A club expenditure record",
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" }
+      },
+      "required": ["description", "amount", "timestamp", "adminId"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System activity log for transparency",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["info", "warning", "critical"] }
+      },
+      "required": ["action", "timestamp", "userId"]
+    },
+    "InitialBalance": {
+      "title": "InitialBalance",
+      "description": "Remaining budget from previous terms/years",
+      "type": "object",
+      "properties": {
+        "amount": { "type": "number" },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "adminId": { "type": "string" },
+        "adminName": { "type": "string" }
+      },
+      "required": ["amount", "timestamp", "adminId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles"
+    },
+    "/teachers/{teacherId}": {
+      "schema": "Teacher",
+      "description": "Teacher collection records"
+    },
+    "/dues/{dueId}": {
+      "schema": "Due",
+      "description": "Standard dues configuration"
+    },
+    "/remittances/{remittanceId}": {
+      "schema": "Remittance",
+      "description": "Remittance records from BODs to Admin"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Club expenditure records"
+    },
+    "/initial_balances/{balanceId}": {
+      "schema": "InitialBalance",
+      "description": "Carry-over budget from previous terms"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "System activity logs"
+    },
+    "/settings/{settingId}": {
+      "schema": "object",
+      "description": "System settings like signatories"
+    }
+  }
+}
