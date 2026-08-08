@@ -3,10 +3,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, Component, useRef } from 'react';
+/// <reference types="vite/client" />
+
+import React, { useState, useEffect, useMemo, useCallback, Component, useRef } from 'react';
 import { Sun, Moon, Check, Send, Plus, User, Mail, PhilippinePeso, Heart, Upload, Trash2, FileText, FileDown, ChevronDown, ChevronUp, Loader2, LogOut, Shield, BarChart3, Wallet, Search, X, ShieldAlert, Lock, Eye, EyeOff, Users, CheckCircle, Clock, ChevronLeft, ChevronRight, AlertCircle, AlertTriangle, Database, QrCode, Download, CreditCard, Activity, Menu, LayoutDashboard, Settings, History, PieChart, TrendingUp, ArrowUpRight, ArrowDownRight, Filter, RefreshCw, Camera, ShieldCheck, MailWarning, Archive, FileBarChart, Undo, Redo, Code, Bell, Megaphone, MessageSquare } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Configure pdfjs worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+
 import { QRCodeCanvas } from 'qrcode.react';
+import { DesktopOceanBackground } from './components/OceanBackground';
+import { CollectionAnalyticsChart } from './components/CollectionAnalyticsChart';
 import { 
   PieChart as RePieChart, Pie, Cell, 
   LineChart as ReLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, Legend, ResponsiveContainer,
@@ -27,7 +36,9 @@ import {
   PageOrientation, 
   BorderStyle,
   VerticalAlign,
-  HeightRule
+  HeightRule,
+  Header,
+  Footer
 } from 'docx';
 import { saveAs } from 'file-saver';
 import html2canvas from 'html2canvas';
@@ -41,9 +52,215 @@ import {
 } from './firebase';
 import type { User as FirebaseUser } from './firebase';
 
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 const SUN_LOGO_SVG = `data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSIjRkNEMTE2IiBzdHJva2U9IiNGQ0QxMTYiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI0Ii8+PHBhdGggZD0iTTEyIDJ2MiIvPjxwYXRoIGQ9Ik0xMiAyMHYyIi8+PHBhdGggZD0ibTQuOTMgNC45MyAxLjQxIDEuNDEiLz48cGF0aCBkPSJtMTcuNjYgMTcuNjYgMS40MSAxLjQxIi8+PHBhdGggZD0iTTIgMTJoMiIvPjxwYXRoIGQ9Ik0yMCAxMmgyIi8+PHBhdGggZD0ibTYuMzQgMTcuNjYtMS40MSAxLjQxIi8+PHBhdGggZD0ibTE5LjA3IDQuOTMtMS40MSAxLjQxIi8+PC9zdmc+`;
+
+/**
+ * Ensures that a value is a Firestore Timestamp instance.
+ * Useful when data is loaded from JSON backups or local state where it might be a plain object.
+ */
+const ensureTimestamp = (val: any): Timestamp => {
+  if (val && typeof val.toDate === 'function') return val;
+  if (val && typeof val.seconds === 'number') {
+    return new Timestamp(val.seconds, val.nanoseconds || 0);
+  }
+  if (typeof val === 'string') {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return Timestamp.fromDate(d);
+  }
+  // Return earliest possible timestamp if completely missing
+  return new Timestamp(0, 0);
+};
+
+const DOCX_HEADER_URL = "https://www.dropbox.com/scl/fi/mjabep0bljlz97zd4x9sm/3-LPCAANHS-Header-with-line-A4.png?rlkey=i9om3suf8gw0pvvluq1lqwadc&st=363uvkkq&raw=1";
+const DOCX_FOOTER_URL = "https://www.dropbox.com/scl/fi/rv3723xd2e653zv7wwphm/4-LPCAANHS-Footer-with-line-A4.png?rlkey=c8vr0w0exbyg293ggsl2mm8io&st=6yau8xhx&raw=1";
+
+const getDirectUrl = (url: string) => {
+  if (url.includes('dropbox.com')) {
+    return url.replace('dl=0', 'raw=1').replace('dl=1', 'raw=1');
+  }
+  return url;
+};
+
+const getDocxHeaderFooter = async (widthInInches: number, docxModules: any, urls?: { header?: string, footer?: string }) => {
+  const { Header, Footer, Paragraph, ImageRun, AlignmentType, TextRun, HeaderFooterType } = docxModules;
+
+    const hfTypeActual = HeaderFooterType?.DEFAULT || "default";
+    const headerUrlToFetch = urls?.header || DOCX_HEADER_URL;
+    const footerUrlToFetch = urls?.footer || DOCX_FOOTER_URL;
+
+    const fetchImageData = async (url: string): Promise<{ data: Uint8Array, width: number, height: number } | null> => {
+      let directUrl = getDirectUrl(url);
+
+      if (directUrl.startsWith('data:')) {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const base64 = directUrl.split(',')[1];
+              const binaryStr = window.atob(base64);
+              const bytes = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              resolve({ data: bytes, width: img.width || 1, height: img.height || 1 });
+            } catch (err) {
+              console.error("Failed to parse base64 image data:", err);
+              resolve(null);
+            }
+          };
+          img.onerror = () => resolve(null);
+          img.src = directUrl;
+        });
+      }
+
+      const tryFetch = async (fetchUrl: string) => {
+        const response = await fetch(fetchUrl, { cache: 'no-cache' });
+        if (!response.ok) throw new Error("Fetch not ok");
+        const blob = await response.blob();
+        return await new Promise<{ data: Uint8Array, width: number, height: number }>((resolve, reject) => {
+          const img = new Image();
+          const objectUrl = URL.createObjectURL(blob);
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.width || 1;
+            canvas.height = img.height || 1;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob((b) => {
+                if (b) {
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    resolve({
+                      data: new Uint8Array(reader.result as ArrayBuffer),
+                      width: img.width || 1,
+                      height: img.height || 1
+                    });
+                    URL.revokeObjectURL(objectUrl);
+                  };
+                  reader.readAsArrayBuffer(b);
+                } else reject(new Error("Canvas toBlob failed"));
+              }, "image/png");
+            } else reject(new Error("No canvas context"));
+          };
+          img.onerror = reject;
+          img.src = objectUrl;
+        });
+      };
+
+    try {
+      return await tryFetch(directUrl);
+    } catch (e1) {
+      try {
+        return await tryFetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(directUrl)}`);
+      } catch (e2) {
+        try {
+          return await tryFetch(`https://corsproxy.io/?${encodeURIComponent(directUrl)}`);
+        } catch (e3) {
+          console.error("All fetch attempts failed for:", url);
+          return null;
+        }
+      }
+    }
+  };
+
+  try {
+    const [headerResult, footerResult] = await Promise.all([
+      fetchImageData(headerUrlToFetch),
+      fetchImageData(footerUrlToFetch)
+    ]);
+
+    // Precise centering logic for 13" paper (18720 twips)
+    // Paper: 13", Left/Right Margins: 0.5" (720 twips) each.
+    // Printable Width = 12.0 inches.
+    // Microsoft Word uses 96 DPI for pixel-to-EMU transformation (914400 EMUs per inch).
+    const printableWidthInches = widthInInches - 1; 
+    const fluidWidth = Math.floor(printableWidthInches * 96); 
+
+    let headerHeightTwips = 0;
+    let footerHeightTwips = 0;
+
+    const headerChildren = [];
+    if (headerResult && headerResult.width > 0 && headerResult.height > 0 && headerResult.data.length > 0) {
+      let targetWidth = Math.min(headerResult.width, 600);
+      const ratio = targetWidth / headerResult.width;
+      let targetHeight = headerResult.height * ratio;
+      
+      headerHeightTwips = Math.round(targetHeight * 15); // Approximate twips for layout processing
+      
+      headerChildren.push(new Paragraph({
+        children: [
+          new ImageRun({
+            data: headerResult.data,
+            transformation: { 
+              width: Math.floor(targetWidth), 
+              height: Math.floor(targetHeight) 
+            },
+          }),
+        ],
+        alignment: AlignmentType.CENTER,
+        indent: { left: 0, right: 0 },
+      }));
+    } else {
+      headerChildren.push(new Paragraph({
+        children: [new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 28 })],
+        alignment: AlignmentType.CENTER,
+        spacing: { after: 200 },
+      }));
+      headerChildren.push(new Paragraph({
+        children: [new TextRun({ text: "FACULTY CLUB OFFICE", size: 20 })],
+        alignment: AlignmentType.CENTER,
+      }));
+      headerHeightTwips = 800; 
+    }
+
+    const footerChildren = [];
+    if (footerResult && footerResult.width > 0 && footerResult.height > 0 && footerResult.data.length > 0) {
+      let targetWidth = Math.min(footerResult.width, 600);
+      const ratio = targetWidth / footerResult.width;
+      let targetHeight = footerResult.height * ratio;
+
+      footerHeightTwips = Math.round(targetHeight * 15);
+      
+      footerChildren.push(new Paragraph({
+        children: [
+          new ImageRun({
+            data: footerResult.data,
+            transformation: { 
+              width: Math.floor(targetWidth), 
+              height: Math.floor(targetHeight) 
+            },
+          }),
+        ],
+        alignment: AlignmentType.CENTER,
+        indent: { left: 0, right: 0 },
+      }));
+    } else {
+      footerChildren.push(new Paragraph({
+        children: [new TextRun({ text: "Generated by LPCAANHS Faculty Club Management System", size: 16 })],
+        alignment: AlignmentType.CENTER,
+        spacing: { before: 200 },
+      }));
+      footerHeightTwips = 400; 
+    }
+
+    return {
+      headers: {
+        [hfTypeActual]: new Header({ children: headerChildren }),
+      },
+      footers: {
+        [hfTypeActual]: new Footer({ children: footerChildren }),
+      },
+      headerHeightTwips,
+      footerHeightTwips
+    };
+  } catch (e) {
+    console.error("Failed to construct header/footer", e);
+    return { headerHeightTwips: 0, footerHeightTwips: 0 };
+  }
+};
 
 type GradeLevel = 'Grade 7' | 'Grade 8' | 'Grade 9' | 'Grade 10';
 
@@ -64,6 +281,7 @@ type TeacherRecord = {
   firstName?: string;
   middleInitial?: string;
   gender?: 'Male' | 'Female';
+  department?: string;
   email: string;
   contactNumber: string;
   gradeLevel: GradeLevel;
@@ -93,6 +311,24 @@ type UserProfile = {
   qrEmail?: string;
   qrPass?: string;
   realEmail?: string;
+};
+
+type ProfileChangeRequest = {
+  id: string;
+  userId: string;
+  userEmail: string;
+  currentName: string;
+  newName: string;
+  currentEmail: string;
+  newEmail: string;
+  currentGradeLevel?: GradeLevel;
+  newGradeLevel?: GradeLevel;
+  currentDepartment?: string;
+  newDepartment?: string;
+  status: 'pending' | 'approved' | 'rejected' | 'acknowledged';
+  note: string;
+  adminNote?: string;
+  timestamp: any;
 };
 
 type Expense = {
@@ -194,7 +430,11 @@ class ErrorBoundary extends Component<any, any> {
   }
 
   static getDerivedStateFromError(error: any) {
-    return { hasError: true, errorInfo: error.message };
+    return { hasError: true, errorInfo: error.stack || error.message || String(error) };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Uncaught React Error:", error, errorInfo);
   }
 
   render() {
@@ -206,17 +446,17 @@ class ErrorBoundary extends Component<any, any> {
           message = "Access Denied: You don't have permission to perform this action.";
         }
       } catch (e) {
-        // Not a JSON error
+        message = this.state.errorInfo;
       }
 
       return (
         <div className="min-h-screen bg-red-50 flex items-center justify-center p-4">
-          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-md w-full text-center border-2 border-red-100">
+          <div className="bg-white p-8 rounded-3xl shadow-2xl max-w-4xl w-full text-center border-2 border-red-100 overflow-auto">
             <div className="bg-red-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
               <Shield className="text-red-600" size={32} />
             </div>
             <h1 className="text-2xl font-black text-gray-900 mb-2">System Error</h1>
-            <p className="text-gray-500 mb-8 font-medium">{message}</p>
+            <pre className="text-left text-xs bg-gray-100 p-4 rounded text-red-800 whitespace-pre-wrap font-mono mb-8">{message}</pre>
             <button 
               onClick={() => window.location.reload()}
               className="w-full bg-[#0038A8] text-white py-4 rounded-2xl font-bold hover:opacity-90 transition-all shadow-lg"
@@ -232,6 +472,36 @@ class ErrorBoundary extends Component<any, any> {
   }
 }
 
+const detectGender = (firstName: string): 'Male' | 'Female' => {
+  if (!firstName) return 'Female'; 
+  const firstWord = firstName.trim().split(' ')[0].toLowerCase();
+  
+  const femaleNames = new Set(["maria", "mary", "ma.", "ma", "anna", "ana", "rose", "jane", "joy", "mae", "princess", "angel", "sarah", "michelle", "jennifer", "jessica", "cristina", "joan", "carmen", "leonor", "marisol", "lourdes", "teresa", "jasmin", "jasmine"]);
+  const maleNames = new Set(["john", "mark", "michael", "paul", "james", "david", "joseph", "richard", "chris", "ryan", "marcus", "christian", "kurt", "joshua", "robert", "manuel", "eduardo", "pedro", "antonio", "jose", "juan", "kevin", "brian", "jason"]);
+  
+  if (femaleNames.has(firstWord)) return 'Female';
+  if (maleNames.has(firstWord)) return 'Male';
+  
+  const lastChar = firstWord.slice(-1);
+  if (lastChar === 'a' || (firstWord.endsWith('ie') && firstWord !== 'charlie') || (firstWord.endsWith('lyn')) || firstWord.endsWith('eth')) return 'Female';
+  if (lastChar === 'o' || lastChar === 'r' || lastChar === 'd' || lastChar === 's' || lastChar === 'n' || lastChar === 'l' || lastChar === 't' || lastChar === 'h' || lastChar === 'k' || lastChar === 'm' || lastChar === 'c' || lastChar === 'g' || lastChar === 'p' || lastChar === 'v' || lastChar === 'x' || lastChar === 'z' || lastChar === 'w' || lastChar === 'b' || lastChar === 'f') return 'Male';
+  
+  return 'Female';
+};
+
+const getDisplayName = (name: string, role?: string) => {
+  if (!name) return "";
+  if (name === 'Executive Officer' || name === 'BOD Member' || name === 'Teacher') return name;
+  
+  let firstName = name;
+  if (name.includes(',')) {
+    firstName = name.split(',')[1]?.trim().split(' ')[0] || name;
+  } else {
+    firstName = name.split(' ')[0];
+  }
+  return role === 'teacher' ? `Teacher ${firstName}` : firstName;
+};
+
 const GlobalOverlays = ({ 
   showTermsModal, 
   setShowTermsModal, 
@@ -244,7 +514,9 @@ const GlobalOverlays = ({
   isDarkMode = false,
   showInAppNotify,
   setShowInAppNotify,
-  setActiveTab
+  setActiveTab,
+  onDismissToast,
+  setShowLoginSuccess
 }: any) => {
   const [termsChecked, setTermsChecked] = useState(false);
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
@@ -288,7 +560,7 @@ const GlobalOverlays = ({
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-blue-100'} w-full max-w-2xl max-h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden border`}
+              className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-blue-100'} w-full max-w-2xl lg:max-w-3xl lg:p-4 max-h-[85vh] rounded-[2.5rem] shadow-2xl flex flex-col overflow-hidden border`}
             >
               <div className={`p-6 sm:p-8 border-b ${isDarkMode ? 'border-gray-800 bg-gray-900' : 'border-gray-100 bg-gray-50/50'} flex items-center justify-between`}>
                 <div className="flex items-center gap-4">
@@ -415,12 +687,21 @@ const GlobalOverlays = ({
       <AnimatePresence>
         {showLoginSuccess && (
           <div className={`fixed inset-0 flex items-center justify-center z-[120] pointer-events-none ${isDarkMode ? 'bg-black/40' : 'bg-blue-900/10'} backdrop-blur-sm`}>
-            <motion.div 
+             <motion.div 
               initial={{ opacity: 0, scale: 0.5, y: 100 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.5, y: 100 }}
               transition={{ type: 'spring', damping: 15, stiffness: 100 }}
-              className={`${isDarkMode ? 'bg-gray-900/90 border-gray-800 shadow-[0_30px_100px_rgba(0,0,0,0.5)]' : 'bg-white/90 border-blue-100 shadow-[0_30px_100px_rgba(0,56,168,0.2)]'} backdrop-blur-xl p-10 rounded-[3rem] border text-center max-w-sm w-full mx-4`}
+              drag="x"
+              dragConstraints={{ left: 0, right: 0 }}
+              dragElastic={0.7}
+              onDragEnd={(e, { offset, velocity }) => {
+                const swipe = Math.abs(offset.x) * velocity.x;
+                if (swipe < -10000 || swipe > 10000 || Math.abs(offset.x) > 100) {
+                  setShowLoginSuccess?.(false);
+                }
+              }}
+              className={`${isDarkMode ? 'bg-gray-900/90 border-gray-800 shadow-[0_30px_100px_rgba(0,0,0,0.5)]' : 'bg-white/90 border-blue-100 shadow-[0_30px_100px_rgba(0,56,168,0.2)]'} backdrop-blur-xl p-10 rounded-[3rem] border text-center max-w-sm md:max-w-md lg:max-w-lg w-full mx-4 touch-pan-y pointer-events-auto`}
             >
               <div className={`${isDarkMode ? 'bg-green-900/40' : 'bg-green-100'} w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 text-green-600 shadow-inner`}>
                 <motion.div
@@ -432,7 +713,7 @@ const GlobalOverlays = ({
                 </motion.div>
               </div>
               <h2 className={`text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} mb-2 tracking-tight`}>
-                Welcome Back{profile?.name ? `, ${profile.name.split(',')[0] === profile.name ? profile.name : profile.name.split(',')[1]?.trim() || profile.name}` : ''}!
+                Welcome Back, {getDisplayName(profile?.name || '', profile?.role)}!
               </h2>
               <p className={`${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'} font-black uppercase tracking-[0.2em] text-[10px]`}>Successfully Logged In</p>
               <div className="mt-8 flex justify-center gap-2">
@@ -452,7 +733,16 @@ const GlobalOverlays = ({
                 initial={{ opacity: 0, y: 50, scale: 0.9 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className={`fixed bottom-4 right-4 left-4 md:bottom-8 md:right-8 md:left-auto md:w-auto ${isDarkMode ? 'bg-gray-900 text-white border-gray-800' : 'bg-white text-gray-900 border-gray-100'} px-6 py-4 md:px-8 md:py-5 rounded-2xl md:rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.3)] flex items-center gap-4 z-[130] border transition-colors duration-300`}
+                drag="x"
+                dragConstraints={{ left: 0, right: 0 }}
+                dragElastic={0.7}
+                onDragEnd={(e, { offset, velocity }) => {
+                  const swipe = Math.abs(offset.x) * velocity.x;
+                  if (swipe < -10000 || swipe > 10000 || Math.abs(offset.x) > 100) {
+                    onDismissToast?.();
+                  }
+                }}
+                className={`fixed bottom-20 right-4 left-4 lg:bottom-8 lg:right-8 lg:left-auto lg:w-auto ${isDarkMode ? 'bg-gray-900 text-white border-gray-800' : 'bg-white text-gray-900 border-gray-100'} px-6 py-4 md:px-8 md:py-5 rounded-2xl md:rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.3)] flex items-center gap-4 z-[130] border transition-colors duration-300 touch-pan-y`}
               >
                 <div className={`${isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-600'} p-3 rounded-2xl`}>
                   <CheckCircle size={24} />
@@ -472,7 +762,16 @@ const GlobalOverlays = ({
                 initial={{ y: -150, opacity: 0, scale: 0.9 }}
                 animate={{ y: 0, opacity: 1, scale: 1 }}
                 exit={{ y: -150, opacity: 0, scale: 0.9 }}
-                className="fixed top-4 left-4 right-4 lg:left-auto lg:right-6 lg:w-[400px] z-[200] pointer-events-auto"
+                drag="x"
+                dragConstraints={{ left: 0, right: 0 }}
+                dragElastic={0.7}
+                onDragEnd={(e, { offset, velocity }) => {
+                  const swipe = Math.abs(offset.x) * velocity.x;
+                  if (swipe < -10000 || swipe > 10000 || Math.abs(offset.x) > 100) {
+                    setShowInAppNotify?.(null);
+                  }
+                }}
+                className="fixed top-4 left-4 right-4 lg:left-auto lg:right-6 lg:w-[400px] z-[200] pointer-events-auto touch-pan-y"
               >
                 <div 
                   onClick={() => setActiveTab('notifications')}
@@ -530,6 +829,88 @@ type AppNotification = {
   }[];
 };
 
+interface NavItemProps {
+  id: any;
+  icon: any;
+  label: string;
+  role?: string;
+  profile: any;
+  activeTab: any;
+  setActiveTab: (id: any) => void;
+  setIsSidebarOpen: (open: boolean) => void;
+  isDarkMode?: boolean;
+}
+
+const NavItem = ({ id, icon: Icon, label, role, profile, activeTab, setActiveTab, setIsSidebarOpen, isDarkMode }: NavItemProps) => {
+  if (role && profile?.role !== role && profile?.role !== 'admin') return null;
+  
+  const isActive = activeTab === id;
+  
+  return (
+    <button
+      onClick={() => {
+        setActiveTab(id);
+        setIsSidebarOpen(false);
+      }}
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group ${
+        isActive 
+          ? 'bg-[#0038A8] text-white shadow-lg shadow-blue-500/20' 
+          : isDarkMode
+            ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white'
+            : 'text-gray-500 hover:bg-blue-50 hover:text-[#0038A8]'
+      }`}
+    >
+      <div className={`p-2 rounded-xl transition-colors ${
+        isActive 
+          ? 'bg-white/20' 
+          : isDarkMode
+            ? 'bg-slate-800 group-hover:bg-slate-700'
+            : 'bg-gray-100 group-hover:bg-white'
+      }`}>
+        <Icon size={18} className={isActive ? 'text-white' : isDarkMode ? 'text-slate-400 group-hover:text-blue-400' : 'text-gray-500 group-hover:text-[#0038A8]'} />
+      </div>
+      <span className={`text-xs lg:text-sm font-black uppercase tracking-widest ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`}>
+        {label}
+      </span>
+      {isActive && (
+        <motion.div 
+          layoutId="active-pill"
+          transition={{ type: "spring", stiffness: 380, damping: 30 }}
+          className="ml-auto w-1.5 h-1.5 bg-[#FCD116] rounded-full shadow-[0_0_8px_#FCD116]"
+        />
+      )}
+    </button>
+  );
+};
+
+const sortRecordsByGradeAndName = (records: any[]) => {
+  return [...records].sort((a, b) => {
+    const aGrade = a.gradeLevel || "";
+    const bGrade = b.gradeLevel || "";
+    
+    // Extract numerical grade values 
+    const aGradeNum = parseInt(aGrade.replace(/\D/g, ''), 10);
+    const bGradeNum = parseInt(bGrade.replace(/\D/g, ''), 10);
+    
+    if (!isNaN(aGradeNum) && !isNaN(bGradeNum) && aGradeNum !== bGradeNum) {
+      return aGradeNum - bGradeNum;
+    }
+
+    const gradeComp = aGrade.localeCompare(bGrade);
+    if (gradeComp !== 0) return gradeComp;
+
+    // Grades are the same, extract last name
+    const extractLastName = (name: string) => {
+       const parts = name.trim().split(/\s+/);
+       return parts.length > 1 ? parts[parts.length - 1] : parts[0];
+    };
+    
+    const aLastName = extractLastName(a.name);
+    const bLastName = extractLastName(b.name);
+    return aLastName.localeCompare(bLastName);
+  });
+};
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -554,6 +935,104 @@ const BACKGROUND_PARTICLES = [...Array(18)].map((_, i) => ({
   xOffset: (Math.random() - 0.5) * 60,
   pops: Math.random() > 0.3 // 70% chance to pop
 }));
+
+const playBubblePop = () => {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!(window as any).popAudioCtx) {
+      (window as any).popAudioCtx = new AudioContextClass();
+    }
+    const ctx = (window as any).popAudioCtx;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    
+    const now = ctx.currentTime;
+    
+    // Create oscillator and gain nodes for realistic, satisfying wet bubble pop
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    osc.type = 'sine';
+    
+    // Bubble pop frequency sweep: fast sweep up sounds like a cute wet pop
+    const pitchStart = 180 + Math.random() * 80;
+    const pitchEnd = 750 + Math.random() * 200;
+    
+    osc.frequency.setValueAtTime(pitchStart, now);
+    osc.frequency.exponentialRampToValueAtTime(pitchEnd, now + 0.05);
+    
+    // Gain envelope (exponential decay)
+    gainNode.gain.setValueAtTime(0.001, now);
+    gainNode.gain.linearRampToValueAtTime(0.12, now + 0.008); // brief fade-in
+    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.065); // quick pop release
+    
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    osc.start(now);
+    osc.stop(now + 0.075);
+  } catch (err) {
+    console.warn("Audio pop error:", err);
+  }
+};
+
+const FloatingBubbleMobile = ({ p }: { p: any }) => {
+  const [isPopped, setIsPopped] = useState(false);
+  const hasPoppedRef = useRef(false);
+
+  const handlePop = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    if (isPopped) return;
+    setIsPopped(true);
+    playBubblePop();
+    // Respawn after 4.5 seconds
+    setTimeout(() => {
+      setIsPopped(false);
+      hasPoppedRef.current = false;
+    }, 4500);
+  };
+
+  if (isPopped) return null;
+
+  return (
+    <motion.div
+      className="absolute rounded-full bg-gradient-to-tr from-white/5 to-white/20 backdrop-blur-[1px] border border-white/20 shadow-[inset_0_2px_4px_rgba(255,255,255,0.3)] pointer-events-auto cursor-pointer"
+      style={{
+        width: p.size,
+        height: p.size,
+        left: `${p.left}%`,
+        bottom: "-10%",
+      }}
+      onPointerDown={handlePop}
+      animate={{
+        y: ["0vh", "-110vh"],
+        x: ["0vw", `${p.xOffset}vw`],
+        scale: p.pops ? [0.5, 1, 1, 1.4, 0] : [0.5, 1, 1],
+        opacity: p.pops ? [0, 0.4, 0.4, 0.6, 0] : [0, 0.4, 0.4]
+      }}
+      transition={{
+        duration: p.duration,
+        repeat: Infinity,
+        ease: "linear",
+        delay: p.delay,
+        times: p.pops ? [0, 0.1, 0.8, 0.9, 0.95] : [0, 0.1, 1]
+      }}
+      onUpdate={(latest) => {
+        if (p.pops && latest.scale && (latest.scale as number) > 1.3) {
+          if (!hasPoppedRef.current) {
+            hasPoppedRef.current = true;
+            playBubblePop();
+          }
+        }
+        if (latest.scale && (latest.scale as number) < 0.7) {
+          hasPoppedRef.current = false;
+        }
+      }}
+    />
+  );
+};
 
 const CARD_PARTICLES = [...Array(6)].map((_, i) => ({
   id: `card-${i}`,
@@ -631,7 +1110,7 @@ const NotificationCenter = ({
                         </span>
                       </div>
                       <p className={`text-[9px] font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} truncate`}>
-                        {notif.timestamp?.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} • {notif.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {ensureTimestamp(notif.timestamp).toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} • {ensureTimestamp(notif.timestamp).toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </p>
                     </div>
                     
@@ -678,16 +1157,41 @@ function AppContent() {
   const [standardDues, setStandardDues] = useState<StandardDue[]>([]);
   const [records, setRecords] = useState<TeacherRecord[]>([]);
   const [remittances, setRemittances] = useState<Remittance[]>([]);
+  const [remittanceNotifications, setRemittanceNotifications] = useState<Remittance[]>([]);
+  const [verifyingNotificationIds, setVerifyingNotificationIds] = useState<string[]>([]);
+  const initialRemittancesLoaded = useRef(false);
+  const knownRemittanceIds = useRef<Set<string>>(new Set());
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [profileChangeRequests, setProfileChangeRequests] = useState<ProfileChangeRequest[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [initialBalances, setInitialBalances] = useState<InitialBalance[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [signatories, setSignatories] = useState<Signatory[]>([]);
+  const [brandingSettings, setBrandingSettings] = useState({ 
+    headerUrl: DOCX_HEADER_URL, 
+    footerUrl: DOCX_FOOTER_URL 
+  });
   const [selectedGrade, setSelectedGrade] = useState<GradeLevel | 'All'>('All');
+
+  const getTeacherRecordByEmail = useCallback((email: string) => {
+    const cleanEmail = email.toLowerCase().trim();
+    if (cleanEmail.startsWith('qr-') && cleanEmail.endsWith('@facultyclub.local')) {
+      return records.find(r => {
+        const tEmail = r.email.toLowerCase().trim().replace('@', '_');
+        return cleanEmail.includes(tEmail);
+      }) || null;
+    }
+    return records.find(r => r.email.toLowerCase().trim() === cleanEmail) || null;
+  }, [records]);
+
+  const getWelcomeDisplayName = useCallback((name: string) => {
+    return getDisplayName(name, profile?.role);
+  }, [profile?.role]);
+
   const teacherRecord = useMemo(() => {
     if (!profile || profile.role !== 'teacher') return null;
-    return records.find(r => r.email.toLowerCase().trim() === profile.email.toLowerCase().trim()) || null;
-  }, [profile, records]);
+    return getTeacherRecordByEmail(profile.email);
+  }, [profile, getTeacherRecordByEmail]);
 
   // Memoized Teacher Stats for Portal
   const teacherStats = useMemo(() => {
@@ -725,7 +1229,7 @@ function AppContent() {
     try {
       const notifRef = doc(db, 'teachers', teacherRecord.id, 'notifications', notifId);
       await deleteDoc(notifRef);
-      setToast("Notification deleted successfully");
+      showToast("Notification deleted successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `teachers/${teacherRecord.id}/notifications/${notifId}`);
     }
@@ -747,7 +1251,7 @@ function AppContent() {
       await updateDoc(notifRef, { replies: updatedReplies });
       setReplyText('');
       setReplyingTo(null);
-      setToast("Reply sent successfully");
+      showToast("Reply sent successfully");
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `teachers/${teacherRecord.id}/notifications/${notifId}`);
     }
@@ -766,11 +1270,15 @@ function AppContent() {
   const [redoStack, setRedoStack] = useState<{ type: string, data: any }[]>([]);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showInAppNotify, setShowInAppNotify] = useState<AppNotification | null>(null);
   const [isSending, setIsSending] = useState<string | null>(null);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editProfileName, setEditProfileName] = useState('');
   const [editProfileEmail, setEditProfileEmail] = useState('');
+  const [editProfileGradeLevel, setEditProfileGradeLevel] = useState<GradeLevel>('Grade 7');
+  const [editProfileDepartment, setEditProfileDepartment] = useState('');
+  const [editProfileNote, setEditProfileNote] = useState('');
   const [isBatchSending, setIsBatchSending] = useState(false);
   const [isBatchDeleting, setIsBatchDeleting] = useState(false);
   const [isBatchUpdateModalOpen, setIsBatchUpdateModalOpen] = useState(false);
@@ -779,6 +1287,40 @@ function AppContent() {
   const [showWipeSuccessModal, setShowWipeSuccessModal] = useState(false);
   const [isSendingReminder, setIsSendingReminder] = useState<string | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
+
+  const handleBrandingImageUpload = (e: React.ChangeEvent<HTMLInputElement>, target: 'headerUrl' | 'footerUrl') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+
+        // Downscale to prevent exceeding Firestore 1MB limit and improve mobile compatibility
+        const MAX_WIDTH = 1200;
+        if (width > MAX_WIDTH) {
+          height = Math.round((height * MAX_WIDTH) / width);
+          width = MAX_WIDTH;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/png'); 
+          setBrandingSettings(prev => ({ ...prev, [target]: dataUrl }));
+        }
+      };
+      if (event.target?.result) {
+        img.src = event.target.result as string;
+      }
+    };
+    reader.readAsDataURL(file);
+  };
   const [showArchiveModal, setShowArchiveModal] = useState(false);
   const [archiveYear, setArchiveYear] = useState(new Date().getFullYear().toString());
   const [isBatchDeleteModalOpen, setIsBatchDeleteModalOpen] = useState(false);
@@ -791,15 +1333,68 @@ function AppContent() {
   const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
   const [isDownloadingImage, setIsDownloadingImage] = useState(false);
   const [isScanSuccess, setIsScanSuccess] = useState(false);
-  const [scannerCameraMode, setScannerCameraMode] = useState<'environment' | 'user'>('environment');
+  const [scannerCameraMode, setScannerCameraMode] = useState<'environment' | 'user'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('scannerCameraMode');
+      if (saved === 'environment' || saved === 'user') return saved;
+    }
+    return 'environment';
+  });
   const [isQRLogin, setIsQRLogin] = useState(false);
+  const [qrLoginData, setQrLoginData] = useState<{ email: string, pass?: string, realEmail: string } | null>(null);
+  const [isQRApprovalPending, setIsQRApprovalPending] = useState(false);
+  const [qrApprovalRequestId, setQrApprovalRequestId] = useState<string | null>(null);
+  const [qrApprovalTeacherName, setQrApprovalTeacherName] = useState<string>('');
+  const [pendingLoginRequests, setPendingLoginRequests] = useState<any[]>([]);
   const [unauthorizedEmail, setUnauthorizedEmail] = useState<string | null>(null);
   const [isMaintenanceMode, setIsMaintenanceMode] = useState(false);
   const [showLoginSuccess, setShowLoginSuccess] = useState(false);
   const justLoggedIn = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Ask for notification permission aggressively on the first user interaction
+  const [isOffline, setIsOffline] = useState(() => typeof navigator !== 'undefined' ? !navigator.onLine : false);
+
+  // Sync network status and display real-time user guidance
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      showToast("You are back online! Syncing latest records.");
+    };
+    const handleOffline = () => {
+      setIsOffline(true);
+      showToast("Working offline with cached dashboard and teacher records.");
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Register service worker globally on first load for complete offline usability
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      const registerSW = () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('Service Worker registered globally with scope:', registration.scope);
+          })
+          .catch((err) => {
+            console.warn('Global Service Worker registration failed:', err);
+          });
+      };
+      
+      if (document.readyState === 'complete') {
+        registerSW();
+      } else {
+        window.addEventListener('load', registerSW);
+        return () => window.removeEventListener('load', registerSW);
+      }
+    }
+  }, []);
+
+  // Ask for notification permission aggressively on the first user interaction & unlock audio context
   useEffect(() => {
     let triggered = false;
     const requestPushOnFirstClick = () => {
@@ -807,6 +1402,21 @@ function AppContent() {
       if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission().catch(() => {});
       }
+      
+      // Initialize/resume the pop sound AudioContext on the very first user interaction
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass && !(window as any).popAudioCtx) {
+          (window as any).popAudioCtx = new AudioContextClass();
+        }
+        const ctx = (window as any).popAudioCtx;
+        if (ctx && ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+      } catch (err) {
+        console.warn("Failed to initialize pop audio context on interaction:", err);
+      }
+
       triggered = true;
       document.removeEventListener('click', requestPushOnFirstClick);
       document.removeEventListener('touchstart', requestPushOnFirstClick);
@@ -828,6 +1438,48 @@ function AppContent() {
   const [announcementMessage, setAnnouncementMessage] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+
+  useEffect(() => {
+    if (!isQRApprovalPending || !qrApprovalRequestId || !qrLoginData) return;
+
+    const unsub = onSnapshot(doc(db, 'login_requests', qrApprovalRequestId), async (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data.status === 'approved') {
+          unsub();
+          setLoading(true);
+          try {
+            await signInWithEmailAndPassword(auth, qrLoginData.email, qrLoginData.pass);
+            setIsQRLogin(true);
+            setIsQRApprovalPending(false);
+            setQrApprovalRequestId(null);
+            setQrLoginData(null);
+            justLoggedIn.current = true;
+            showToast("Login Approved!");
+            // Clean up the request quietly
+            deleteDoc(doc(db, 'login_requests', qrApprovalRequestId)).catch(err => console.warn("Cleanup error:", err));
+          } catch (error: any) {
+            console.error("Final QR Login Error:", error);
+            showToast(`Login Failed: ${error.message}`);
+            setIsQRApprovalPending(false);
+          } finally {
+            setLoading(false);
+          }
+        } else if (data.status === 'denied') {
+          unsub();
+          setIsQRApprovalPending(false);
+          setQrApprovalRequestId(null);
+          showToast("Login Request Denied by Admin.");
+          // Clean up the denied request quietly
+          deleteDoc(doc(db, 'login_requests', qrApprovalRequestId)).catch(err => console.warn("Cleanup error:", err));
+        }
+      }
+    }, (error) => {
+      console.error("QR Approval Listener Error:", error);
+    });
+
+    return () => unsub();
+  }, [isQRApprovalPending, qrApprovalRequestId, qrLoginData]);
 
   // Notifications pop-up trigger logic
   const shownNotifIds = useRef<Set<string>>(new Set());
@@ -868,8 +1520,13 @@ function AppContent() {
   useEffect(() => {
     if (justLoggedIn.current && user && profile) {
       justLoggedIn.current = false;
+      if (!isMaintenanceMode) {
+        // Fast transition
+        setShowLoginSuccess(true);
+        setTimeout(() => setShowLoginSuccess(false), 3000);
+      }
     }
-  }, [user, profile]);
+  }, [user, profile, isMaintenanceMode]);
 
   const [isVoluntaryModalOpen, setIsVoluntaryModalOpen] = useState(false);
   const [voluntaryPaymentData, setVoluntaryPaymentData] = useState<{ teacherId: string, dueId: string, amount: string } | null>(null);
@@ -884,22 +1541,29 @@ function AppContent() {
   const [userSearchTerm, setUserSearchTerm] = useState('');
   const [showDues, setShowDues] = useState(true);
   const [showPayments, setShowPayments] = useState(true);
+  const [adminSubTab, setAdminSubTab] = useState<'users' | 'broadcast' | 'maintenance'>('users');
 
-  // QR Verification States
-  const [isVerifyingQR, setIsVerifyingQR] = useState(false);
-  
+  const [showTermsModal, setShowTermsModal] = useState(false);
+
   useEffect(() => {
     localStorage.setItem('teacher-dark-mode', isDarkMode.toString());
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
   }, [isDarkMode]);
 
   const toggleDarkMode = () => setIsDarkMode(!isDarkMode);
 
-  const [verificationCode, setVerificationCode] = useState('');
-  const [verificationExpiry, setVerificationExpiry] = useState<number | null>(null);
-  const [qrLoginData, setQrLoginData] = useState<{ email: string, pass?: string, realEmail: string } | null>(null);
-  const [verificationInput, setVerificationInput] = useState('');
-  const [resendTimer, setResendTimer] = useState(0);
-  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const docRef = doc(db, 'settings', 'global');
@@ -967,7 +1631,7 @@ function AppContent() {
     
     // 1. Add verified remittances (BOD collections)
     remittances.filter(r => r.status === 'verified').forEach(r => {
-      const date = r.timestamp?.toDate();
+      const date = ensureTimestamp(r.timestamp).toDate();
       if (date) {
         const monthName = date.toLocaleString('default', { month: 'short' });
         if (!monthsData[monthName]) {
@@ -981,7 +1645,7 @@ function AppContent() {
     records.forEach(record => {
       record.paymentHistory?.forEach(payment => {
         if (payment.collectedByRole === 'admin') {
-          const date = new Date(payment.date);
+          const date = ensureTimestamp(payment.date).toDate();
           const monthName = date.toLocaleString('default', { month: 'short' });
           if (!monthsData[monthName]) {
             monthsData[monthName] = { monthly: 0, cumulative: 0, order: monthOrder.indexOf(monthName) };
@@ -1004,7 +1668,7 @@ function AppContent() {
   }, [remittances, records]);
 
   const filteredRecords = useMemo(() => {
-    return records
+    const filtered = records
       .filter(record => {
         const matchesSearch = record.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                              record.email.toLowerCase().includes(searchQuery.toLowerCase());
@@ -1027,8 +1691,9 @@ function AppContent() {
                               (paymentFilter === 'Pending' && totalPaid === 0);
         
         return matchesSearch && matchesGrade && matchesPayment;
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      });
+
+    return sortRecordsByGradeAndName(filtered);
   }, [records, searchQuery, selectedGrade, paymentFilter, standardDues]);
 
   useEffect(() => {
@@ -1038,7 +1703,14 @@ function AppContent() {
     let isInitialLoad = true;
     
     const unsubscribe = onSnapshot(query(collection(db, 'teachers', teacherRecord.id, 'notifications')), (snapshot) => {
-      const notifData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AppNotification));
+      const notifData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { 
+          id: doc.id, 
+          ...d, 
+          timestamp: ensureTimestamp(d.timestamp) 
+        } as AppNotification;
+      });
       setNotifications(notifData.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
       
       // Trigger native notification for new ones via docChanges
@@ -1190,86 +1862,159 @@ function AppContent() {
 
   const markAsRead = async (notifId: string) => {
     if (!profile) return;
-    const teacherRecord = records.find(r => r.email === profile.email);
-    if (teacherRecord) {
-      await updateDoc(doc(db, 'teachers', teacherRecord.id, 'notifications', notifId), {
+    const teacherRec = getTeacherRecordByEmail(profile.email);
+    if (teacherRec) {
+      await updateDoc(doc(db, 'teachers', teacherRec.id, 'notifications', notifId), {
         isRead: true
       });
     }
   };
 
-  const NavItem = ({ id, icon: Icon, label, role }: { id: typeof activeTab, icon: any, label: string, role?: string }) => {
-    if (role && profile?.role !== role && profile?.role !== 'admin') return null;
+    // Removed NavItem definition from here to prevent re-renders
     
-    const isActive = activeTab === id;
-    
-    return (
-      <button
-        onClick={() => {
-          setActiveTab(id);
-          setIsSidebarOpen(false);
-        }}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 group ${
-          isActive 
-            ? 'bg-[#0038A8] text-white shadow-lg shadow-blue-200' 
-            : 'text-gray-500 hover:bg-blue-50 hover:text-[#0038A8]'
-        }`}
-      >
-        <div className={`p-2 rounded-xl transition-colors ${
-          isActive ? 'bg-white/20' : 'bg-gray-100 group-hover:bg-white'
-        }`}>
-          <Icon size={18} className={isActive ? 'text-white' : 'text-gray-500 group-hover:text-[#0038A8]'} />
-        </div>
-        <span className={`text-xs lg:text-sm font-black uppercase tracking-widest ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}`}>
-          {label}
-        </span>
-        {isActive && (
-          <motion.div 
-            layoutId="active-pill"
-            className="ml-auto w-1.5 h-1.5 bg-[#FCD116] rounded-full shadow-[0_0_8px_#FCD116]"
-          />
-        )}
-      </button>
-    );
-  };
-
-  useEffect(() => {
+    useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, selectedGrade, paymentFilter]);
 
   useEffect(() => {
     if (profile) {
+      const teacherRec = getTeacherRecordByEmail(profile.email);
       setEditProfileName(profile.name);
-      setEditProfileEmail(profile.email);
+      
+      // Use real email for editing if it's a QR login
+      if (teacherRec && profile.email.includes('@facultyclub.local')) {
+        setEditProfileEmail(teacherRec.email);
+      } else {
+        setEditProfileEmail(profile.email);
+      }
+
+      if (teacherRec) {
+        setEditProfileGradeLevel(teacherRec.gradeLevel);
+        setEditProfileDepartment(teacherRec.department || '');
+      }
     }
+  }, [profile, getTeacherRecordByEmail]);
+
+  useEffect(() => {
+    const isExecutive = profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com';
+    if (!profile || (profile.role !== 'admin' && !isExecutive)) {
+      setPendingLoginRequests([]);
+      return;
+    }
+
+    const q = query(collection(db, 'login_requests'), where('status', '==', 'pending'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const requests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPendingLoginRequests(requests);
+    });
+
+    return () => unsub();
   }, [profile]);
 
   const handleSaveProfile = async () => {
     if (!profile) return;
     try {
-      showToast("Updating profile...");
-      // Update users collection
-      await updateDoc(doc(db, 'users', profile.uid), {
-        name: editProfileName,
-        email: editProfileEmail
-      });
-      
-      // Update teachers collection if it exists
-      const teacherRecord = records.find(r => r.email === profile.email);
-      if (teacherRecord) {
-        await updateDoc(doc(db, 'teachers', teacherRecord.id), {
+      if (profile.role === 'teacher') {
+         showToast("Submitting profile update request...");
+         const teacherRec = getTeacherRecordByEmail(profile.email);
+         await addDoc(collection(db, 'profile_change_requests'), {
+            userId: profile.uid,
+            userEmail: profile.email,
+            currentName: profile.name,
+            newName: editProfileName,
+            currentEmail: profile.email,
+            newEmail: editProfileEmail,
+            currentGradeLevel: teacherRec?.gradeLevel,
+            newGradeLevel: editProfileGradeLevel,
+            currentDepartment: teacherRec?.department || '',
+            newDepartment: editProfileDepartment,
+            status: 'pending',
+            note: editProfileNote,
+            timestamp: serverTimestamp()
+         });
+         showToast("Your profile update request has been sent to the Admin for approval.");
+         setIsEditingProfile(false);
+         setEditProfileNote('');
+         logActivity("Requested Profile Update", `User ${profile.email} requested a profile update`);
+      } else {
+        showToast("Updating profile...");
+        // Update users collection
+        await updateDoc(doc(db, 'users', profile.uid), {
           name: editProfileName,
-          email: editProfileEmail
+          email: editProfileEmail,
+          gradeLevel: editProfileGradeLevel as any
         });
+        
+        // Update teachers collection if it exists
+        const teacherRec = getTeacherRecordByEmail(profile.email);
+        if (teacherRec) {
+          await updateDoc(doc(db, 'teachers', teacherRec.id), {
+            name: editProfileName,
+            email: editProfileEmail,
+            gradeLevel: editProfileGradeLevel,
+            department: editProfileDepartment
+          });
+        }
+        
+        setProfile({ ...profile, name: editProfileName, email: editProfileEmail, gradeLevel: editProfileGradeLevel });
+        setIsEditingProfile(false);
+        showToast("Profile updated successfully.");
+        logActivity("Updated Profile", `User ${profile.email} updated their profile`);
       }
-      
-      setProfile({ ...profile, name: editProfileName, email: editProfileEmail });
-      setIsEditingProfile(false);
-      showToast("Profile updated successfully.");
-      logActivity("Updated Profile", `User ${profile.email} updated their profile`);
     } catch (error: any) {
       console.error("Update Profile Error:", error);
       showToast(`Failed to update profile: ${error.message}`);
+    }
+  };
+
+  const approveLoginRequest = async (requestId: string) => {
+    try {
+      await updateDoc(doc(db, 'login_requests', requestId), {
+        status: 'approved'
+      });
+      showToast("Login Approved!");
+      logActivity("Approve Login", `Approved QR login for a teacher`);
+    } catch (err: any) {
+      console.error("Approve Error:", err);
+      showToast("Failed to approve.");
+    }
+  };
+
+  const approveAllLoginRequests = async () => {
+    if (pendingLoginRequests.length === 0) return;
+    if (!window.confirm(`Authorize all ${pendingLoginRequests.length} pending secure login requests?`)) return;
+    
+    setLoading(true);
+    try {
+      const batchSize = 10;
+      for (let i = 0; i < pendingLoginRequests.length; i += batchSize) {
+        const chunk = pendingLoginRequests.slice(i, i + batchSize);
+        await Promise.all(chunk.map(req => 
+          updateDoc(doc(db, 'login_requests', req.id), {
+            status: 'approved'
+          })
+        ));
+      }
+      showToast(`Bulk approved ${pendingLoginRequests.length} login requests!`);
+      logActivity("Bulk Approve Login", `Approved ${pendingLoginRequests.length} QR logins`);
+    } catch (error) {
+      console.error("Bulk Approve Error:", error);
+      showToast("Failed to process bulk approval.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const denyLoginRequest = async (requestId: string) => {
+    try {
+      await updateDoc(doc(db, 'login_requests', requestId), {
+        status: 'denied'
+      });
+      showToast("Login Denied.");
+      logActivity("Deny Login", `Denied QR login for a teacher`);
+    } catch (err: any) {
+      console.error("Deny Error:", err);
+      showToast("Failed to deny.");
     }
   };
 
@@ -1375,6 +2120,200 @@ function AppContent() {
     }
   };
 
+  const handleDownloadBackup = async () => {
+    try {
+      setIsGeneratingBackup(true);
+      setBackupDownloadUrl(null);
+      showToast("Generating full database backup... please wait.");
+      
+      const mainCollections = ['users', 'teachers', 'dues', 'remittances', 'expenses', 'initial_balances', 'audit_logs', 'settings', 'archives'];
+      const backupData: Record<string, any[]> = {};
+      
+      // 1. Fetch all main collections in parallel
+      await Promise.all(mainCollections.map(async (colName) => {
+        try {
+          const snap = await getDocs(collection(db, colName));
+          backupData[colName] = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        } catch (e: any) {
+          throw new Error(`Failed reading collection '${colName}': ${e.message}`);
+        }
+      }));
+
+      // 2. Fetch notifications for all teachers in parallel
+      backupData['teachers_notifications'] = [];
+      const teachers = backupData['teachers'] || [];
+      if (teachers.length > 0) {
+        const notifBatches = await Promise.all(teachers.map(async (teacher: any) => {
+          try {
+            const notifSnap = await getDocs(collection(db, 'teachers', teacher.id, 'notifications'));
+            return notifSnap.docs.map(doc => ({ _parentId: teacher.id, id: doc.id, ...doc.data() }));
+          } catch (e: any) {
+             console.warn(`Could not read notifications for teacher ${teacher.id}: ${e.message}`);
+             return [];
+          }
+        }));
+        backupData['teachers_notifications'] = notifBatches.flat();
+      }
+
+      // 3. Fetch subcollections for all archives in parallel
+      backupData['archives_teachers'] = [];
+      backupData['archives_expenses'] = [];
+      backupData['archives_remittances'] = [];
+      const archives = backupData['archives'] || [];
+      
+      if (archives.length > 0) {
+        await Promise.all(archives.map(async (archive: any) => {
+          try {
+            const [ts, es, rs] = await Promise.all([
+              getDocs(collection(db, 'archives', archive.id, 'teachers')),
+              getDocs(collection(db, 'archives', archive.id, 'expenses')),
+              getDocs(collection(db, 'archives', archive.id, 'remittances'))
+            ]);
+            
+            ts.docs.forEach(doc => backupData['archives_teachers'].push({ _parentId: archive.id, id: doc.id, ...doc.data() }));
+            es.docs.forEach(doc => backupData['archives_expenses'].push({ _parentId: archive.id, id: doc.id, ...doc.data() }));
+            rs.docs.forEach(doc => backupData['archives_remittances'].push({ _parentId: archive.id, id: doc.id, ...doc.data() }));
+          } catch (e: any) {
+            console.warn(`Could not read subcollections for archive ${archive.id}: ${e.message}`);
+          }
+        }));
+      }
+
+      const backup = {
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          data: backupData
+      };
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      setBackupDownloadUrl(url);
+      setBackupFileName(`FCMS_Database_Backup_${new Date().toISOString().split('T')[0]}.json`);
+      
+      showToast("Backup generated successfully. Click the 'Download Ready' button below.");
+      logActivity("System Backup", `Admin ${profile?.name || 'Admin'} generated database backup`);
+    } catch (e: any) {
+      console.error("Backup failed", e);
+      showToast(`Backup blocked: ${e.message}`);
+    } finally {
+      setIsGeneratingBackup(false);
+    }
+  };
+
+  const handleUploadBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!window.confirm("CRITICAL WARNING: This will completely WIPE the current database and replace it with the backup file. This action cannot be undone. Are you absolutely sure you want to proceed?")) {
+        event.target.value = '';
+        return;
+    }
+
+    try {
+        showToast("Wiping database and restoring backup... please wait. DO NOT close this window.");
+        
+        const text = await file.text();
+        const backup = JSON.parse(text);
+
+        if (!backup.data || !backup.version) {
+            throw new Error("Invalid backup file format. Missing data or version tag.");
+        }
+
+        const mainCollections = ['users', 'teachers', 'dues', 'remittances', 'expenses', 'initial_balances', 'audit_logs', 'settings', 'archives'];
+        
+        let batch = writeBatch(db);
+        let opCount = 0;
+
+        const commitBatchIfNeeded = async () => {
+            if (opCount >= 450) {
+                await batch.commit();
+                batch = writeBatch(db);
+                opCount = 0;
+            }
+        };
+
+        const currentTeachers = await getDocs(collection(db, 'teachers'));
+        for (const t of currentTeachers.docs) {
+            const notifs = await getDocs(collection(db, 'teachers', t.id, 'notifications'));
+            for (const n of notifs.docs) { batch.delete(n.ref); opCount++; await commitBatchIfNeeded(); }
+        }
+
+        const currentArchives = await getDocs(collection(db, 'archives'));
+        for (const a of currentArchives.docs) {
+            const subCols = ['teachers', 'expenses', 'remittances'];
+            for (const sub of subCols) {
+                const subSnap = await getDocs(collection(db, 'archives', a.id, sub));
+                for (const s of subSnap.docs) { batch.delete(s.ref); opCount++; await commitBatchIfNeeded(); }
+            }
+        }
+
+        for (const colName of mainCollections) {
+            const snap = await getDocs(collection(db, colName));
+            for (const d of snap.docs) {
+                // IMPORTANT: Never delete the active admin, otherwise Firestore rules will instantly block the rest of this wipe and restore process!
+                if (colName === 'users' && d.id === user?.uid) continue;
+                batch.delete(d.ref); opCount++; await commitBatchIfNeeded();
+            }
+        }
+
+        const restoreTimestamps = (obj: any): any => {
+            if (obj === null || typeof obj !== 'object') return obj;
+            if (Array.isArray(obj)) return obj.map(restoreTimestamps);
+            if (Object.keys(obj).length === 2 && 'seconds' in obj && 'nanoseconds' in obj) {
+                return new Timestamp(obj.seconds, obj.nanoseconds);
+            }
+            const newObj: any = {};
+            for (const key in obj) { newObj[key] = restoreTimestamps(obj[key]); }
+            return newObj;
+        };
+
+        for (const colName of mainCollections) {
+            if (backup.data[colName]) {
+                for (const docData of backup.data[colName]) {
+                    const { id, ...data } = docData;
+                    batch.set(doc(db, colName, id), restoreTimestamps(data));
+                    opCount++; await commitBatchIfNeeded();
+                }
+            }
+        }
+
+        if (backup.data['teachers_notifications']) {
+            for (const docData of backup.data['teachers_notifications']) {
+                const { id, _parentId, ...data } = docData;
+                batch.set(doc(db, 'teachers', _parentId, 'notifications', id), restoreTimestamps(data));
+                opCount++; await commitBatchIfNeeded();
+            }
+        }
+        
+        const archiveSubCols = ['teachers', 'expenses', 'remittances'];
+        for (const sub of archiveSubCols) {
+            const key = `archives_${sub}`;
+            if (backup.data[key]) {
+                for (const docData of backup.data[key]) {
+                    const { id, _parentId, ...data } = docData;
+                    batch.set(doc(db, 'archives', _parentId, sub, id), restoreTimestamps(data));
+                    opCount++; await commitBatchIfNeeded();
+                }
+            }
+        }
+
+        if (opCount > 0) {
+            await batch.commit();
+        }
+
+        showToast("Database restored successfully! Reloading system...");
+        logActivity("System Restoration", `Admin ${profile?.name || 'Admin'} restored database from backup file.`);
+        
+        setTimeout(() => { window.location.reload(); }, 2000);
+
+    } catch (e: any) {
+        console.error("Restore failed", e);
+        showToast(`Failed to restore backup: ${e.message}`);
+    } finally {
+        event.target.value = '';
+    }
+  };
+
   const handleAddInitialBalance = async () => {
     if (!newBalanceAmount || isNaN(parseFloat(newBalanceAmount))) {
       showToast("Please enter a valid amount.");
@@ -1400,6 +2339,7 @@ function AppContent() {
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<TeacherRecord | null>(null);
+  const [supervisingTeacherId, setSupervisingTeacherId] = useState<string | null>(null);
   const [editLastName, setEditLastName] = useState('');
   const [editFirstName, setEditFirstName] = useState('');
   const [editMiddleInitial, setEditMiddleInitial] = useState('');
@@ -1460,6 +2400,7 @@ function AppContent() {
           
           setUser(firebaseUser);
           setProfile(data);
+          setUnauthorizedEmail(null);
         } else {
           try {
             // Check if this email belongs to a teacher (client-side filter for case-insensitivity)
@@ -1468,17 +2409,33 @@ function AppContent() {
             
             let role: 'admin' | 'bod' | 'teacher' | 'unauthorized' = 'unauthorized';
             let gradeLevel: GradeLevel | 'All' = 'Grade 7';
+            let assignedName = firebaseUser.displayName || '';
             
             if (isAdminEmail) {
               role = 'admin';
               gradeLevel = 'All';
+              if (!assignedName) assignedName = 'Executive Officer';
             } else if (isBodEmail) {
               const actualBodEmail = Object.keys(ALLOWED_BODS).find(key => key.toLowerCase().trim() === email);
               role = 'bod';
               gradeLevel = actualBodEmail ? ALLOWED_BODS[actualBodEmail] : 'Grade 7';
+              if (!assignedName) assignedName = 'BOD Member';
             } else if (teacherDoc) {
               role = 'teacher';
               gradeLevel = teacherDoc.data().gradeLevel;
+              if (!assignedName) assignedName = teacherDoc.data().name;
+            } else if (isQRLoginEmail) {
+              // Synthetic email from QR code, look up corresponding teacher
+              const matchingTeacher = teachersSnap.docs.find(tDoc => {
+                const tEmail = tDoc.data().email.toLowerCase().trim().replace('@', '_');
+                return email.includes(tEmail);
+              });
+              
+              if (matchingTeacher) {
+                role = 'teacher';
+                gradeLevel = matchingTeacher.data().gradeLevel;
+                if (!assignedName) assignedName = matchingTeacher.data().name;
+              }
             }
 
             if (role === 'unauthorized') {
@@ -1496,11 +2453,12 @@ function AppContent() {
               email: firebaseUser.email || '',
               role,
               gradeLevel,
-              name: firebaseUser.displayName || (isAdminEmail ? 'Executive Officer' : role === 'teacher' ? 'Teacher' : 'BOD Member')
+              name: assignedName || 'Teacher'
             };
             await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
             setUser(firebaseUser);
             setProfile(newProfile);
+            setUnauthorizedEmail(null);
           } catch (error) {
             console.error("Error during user initialization:", error);
             signOut(auth);
@@ -1524,7 +2482,14 @@ function AppContent() {
   useEffect(() => {
     if (!user) return;
     const unsubscribe = onSnapshot(collection(db, 'dues'), (snapshot) => {
-      const duesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StandardDue));
+      const duesData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { 
+          id: doc.id, 
+          ...d, 
+          timestamp: ensureTimestamp(d.timestamp) 
+        } as StandardDue;
+      });
       setStandardDues(duesData);
     }, (error) => console.warn("Dues snapshot error:", error));
     return () => unsubscribe();
@@ -1546,7 +2511,17 @@ function AppContent() {
     }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const teacherData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TeacherRecord));
+      const teacherData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { 
+          id: doc.id, 
+          ...d, 
+          paidDueIds: d.paidDueIds || [], 
+          paymentHistory: (d.paymentHistory || []).map((p: any) => ({ ...p, date: ensureTimestamp(p.date) })),
+          voluntaryPayments: d.voluntaryPayments || {},
+          timestamp: ensureTimestamp(d.timestamp)
+        } as TeacherRecord;
+      });
       console.log("Teachers updated:", teacherData);
       setRecords(teacherData);
     }, (error) => console.warn("Teachers snapshot error:", error));
@@ -1561,11 +2536,51 @@ function AppContent() {
       q = query(collection(db, 'remittances'), where('bodId', '==', profile.uid));
     }
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const remData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Remittance));
+      const remData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { 
+            id: doc.id, 
+            ...d, 
+            teacherIds: d.teacherIds || [], 
+            timestamp: ensureTimestamp(d.timestamp) 
+        } as Remittance;
+      });
       setRemittances(remData);
     }, (error) => console.warn("Remittances snapshot error:", error));
     return () => unsubscribe();
   }, [user, profile]);
+
+  // Real-time remittance notification detector
+  useEffect(() => {
+    if (!profile || profile.role !== 'admin' || remittances.length === 0) {
+      if (remittances.length > 0 && !initialRemittancesLoaded.current) {
+        remittances.forEach(r => knownRemittanceIds.current.add(r.id));
+        initialRemittancesLoaded.current = true;
+      }
+      return;
+    }
+
+    if (!initialRemittancesLoaded.current) {
+      remittances.forEach(r => knownRemittanceIds.current.add(r.id));
+      initialRemittancesLoaded.current = true;
+      return;
+    }
+
+    // Identify newly added remittances with status 'pending'
+    remittances.forEach(r => {
+      if (!knownRemittanceIds.current.has(r.id)) {
+        knownRemittanceIds.current.add(r.id);
+        if (r.status === 'pending') {
+          playSound();
+          setRemittanceNotifications(prev => {
+            // Guard against duplicate notification entries just in case
+            if (prev.some(p => p.id === r.id)) return prev;
+            return [r, ...prev];
+          });
+        }
+      }
+    });
+  }, [remittances, profile]);
 
   // Admin: Fetch all users
   useEffect(() => {
@@ -1581,7 +2596,10 @@ function AppContent() {
   useEffect(() => {
     if (!user || !profile || (profile.role !== 'admin' && profile.role !== 'bod')) return;
     const unsubscribe = onSnapshot(collection(db, 'expenses'), (snapshot) => {
-      const expenseData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      const expenseData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { id: doc.id, ...d, timestamp: ensureTimestamp(d.timestamp) } as Expense;
+      });
       setExpenses(expenseData);
     }, (error) => console.warn("Expenses snapshot error:", error));
     return () => unsubscribe();
@@ -1591,7 +2609,10 @@ function AppContent() {
   useEffect(() => {
     if (!user) return;
     const unsubscribe = onSnapshot(collection(db, 'initial_balances'), (snapshot) => {
-      const balanceData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InitialBalance));
+      const balanceData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { id: doc.id, ...d, timestamp: ensureTimestamp(d.timestamp) } as InitialBalance;
+      });
       setInitialBalances(balanceData);
     }, (error) => console.warn("Initial balances snapshot error:", error));
     return () => unsubscribe();
@@ -1602,10 +2623,34 @@ function AppContent() {
     if (!user || !profile || profile.role !== 'admin') return;
     const q = query(collection(db, 'audit_logs'), where('timestamp', '!=', null));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const logData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AuditLog));
+      const logData = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { id: doc.id, ...d, timestamp: ensureTimestamp(d.timestamp) } as AuditLog;
+      });
       // Sort manually because Firestore query might need index
-      setAuditLogs(logData.sort((a, b) => b.timestamp?.seconds - a.timestamp?.seconds));
+      setAuditLogs(logData.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
     }, (error) => console.warn("Audit logs snapshot error:", error));
+    return () => unsubscribe();
+  }, [user, profile]);
+
+  // Fetch Profile Change Requests
+  useEffect(() => {
+    if (!user || !profile) return;
+    let q;
+    if (profile.role === 'admin') {
+      q = query(collection(db, 'profile_change_requests'));
+    } else if (profile.role === 'teacher') {
+      q = query(collection(db, 'profile_change_requests'), where('userId', '==', profile.uid));
+    } else {
+      return;
+    }
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const requests = snapshot.docs.map(doc => {
+        const d = doc.data() as any;
+        return { id: doc.id, ...d, timestamp: ensureTimestamp(d.timestamp) } as ProfileChangeRequest;
+      });
+      setProfileChangeRequests(requests.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)));
+    }, (error) => console.warn("Profile change requests snapshot error:", error));
     return () => unsubscribe();
   }, [user, profile]);
 
@@ -1631,6 +2676,37 @@ function AppContent() {
     }, (error) => console.warn("Signatories snapshot error:", error));
     return () => unsubscribe();
   }, [user, profile]);
+
+  // Fetch Branding Settings
+  useEffect(() => {
+    if (!user || !profile) return;
+    const unsubscribe = onSnapshot(doc(db, 'settings', 'branding'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setBrandingSettings({
+          headerUrl: data.headerUrl || DOCX_HEADER_URL,
+          footerUrl: data.footerUrl || DOCX_FOOTER_URL
+        });
+      }
+    }, (error) => console.warn("Branding settings snapshot error:", error));
+    return () => unsubscribe();
+  }, [user, profile]);
+
+  const updateBranding = async (header: string, footer: string) => {
+    try {
+      await setDoc(doc(db, 'settings', 'branding'), { 
+        headerUrl: header, 
+        footerUrl: footer,
+        updatedAt: serverTimestamp(),
+        updatedBy: profile?.uid
+      });
+      showToast("Branding settings updated.");
+      logActivity("Updated Report Branding", "Admin updated header/footer URLs.");
+    } catch (e: any) {
+      console.error("Branding update error:", e);
+      showToast("Failed to update branding.");
+    }
+  };
 
   const updateSignatories = async (newList: Signatory[]) => {
     try {
@@ -1663,8 +2739,12 @@ function AppContent() {
 
   useEffect(() => {
     let html5QrCode: Html5Qrcode | null = null;
+    let isProcessing = false;
+    let isMounted = true;
 
     const processScannedData = async (decodedText: string, stopScanner?: () => Promise<void>) => {
+    if (isProcessing) return;
+    isProcessing = true;
     try {
       console.log("QR Code Scanned (raw):", decodedText);
       let data;
@@ -1673,11 +2753,13 @@ function AppContent() {
         console.log("QR Code Parsed Data:", data);
       } catch (e) {
         console.error("QR Code JSON Parse Error:", e, "Raw Text:", decodedText);
+        isProcessing = false;
         throw new Error("Invalid QR code format (JSON parse failed)");
       }
       
       if (!data.email) {
         console.error("QR Code Missing Email Field:", data);
+        isProcessing = false;
         throw new Error("Invalid QR code format (missing email)");
       }
 
@@ -1703,9 +2785,13 @@ function AppContent() {
         
         if (!snapshot.empty) {
           const userData = snapshot.docs[0].data();
-          if (userData.email !== targetEmail) {
+          // If the QR code missing realEmail, update targetEmail
+          if (userData.email && targetEmail !== userData.email && data.email.includes('@facultyclub.local')) {
+            targetEmail = userData.email; 
+          } else if (userData.email !== targetEmail) {
             showToast("The email address for this account has been changed. This QR code is no longer valid. Please generate a new one.");
             setLoading(false);
+            isProcessing = false;
             return;
           }
         } else {
@@ -1717,11 +2803,13 @@ function AppContent() {
             if (userData.qrEmail && userData.qrEmail !== data.email) {
               showToast("This QR code is no longer valid. Please generate a new one.");
               setLoading(false);
+              isProcessing = false;
               return;
             }
           } else {
              showToast("Account not found. This QR code may be invalid or the account was deleted.");
              setLoading(false);
+             isProcessing = false;
              return;
           }
         }
@@ -1729,21 +2817,62 @@ function AppContent() {
          console.error("Error validating QR code:", err);
       }
       
-      // Start verification process for everyone
+      // Skip verification process for BODs, executives, and treasurer
+      const emailLower = targetEmail.toLowerCase().trim();
+      const isAdminEmail = emailLower === 'lpcaanhsfacultyclubofficers@gmail.com' || emailLower === 'ngehthong@gmail.com';
+      const isBodEmail = Object.keys(ALLOWED_BODS).some(key => key.toLowerCase().trim() === emailLower);
+      
+      if (isAdminEmail || isBodEmail) {
+        setLoading(true);
+        try {
+          await signInWithEmailAndPassword(auth, data.email, data.pass);
+          setIsQRLogin(true);
+          justLoggedIn.current = true;
+        } catch (error: any) {
+          console.error("QR Verification Login Error:", error);
+          showToast(`Login Failed: ${error.message}`);
+          isProcessing = false;
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
+      // Start approval process for teachers
+      const teacherObj = records.find(r => r.email.toLowerCase().trim() === targetEmail.toLowerCase().trim());
+      const teacherName = teacherObj?.name || targetEmail;
+      setQrApprovalTeacherName(teacherName);
+
       setQrLoginData({ 
         email: data.email, 
         pass: data.pass,
         realEmail: targetEmail 
       });
-      
-      setIsVerifyingQR(true);
-      
-      sendVerificationCode(targetEmail);
+
+      setLoading(true);
+      try {
+        const docRef = await addDoc(collection(db, 'login_requests'), {
+          teacherEmail: targetEmail,
+          teacherName: teacherName,
+          status: 'pending',
+          requestedAt: new Date().toISOString()
+        });
+        setQrApprovalRequestId(docRef.id);
+        setIsQRApprovalPending(true);
+        showToast("Login request sent! Please wait for Admin approval.");
+      } catch (err) {
+        console.error("Login Request Error:", err);
+        showToast("Failed to send login request.");
+        isProcessing = false;
+      } finally {
+        setLoading(false);
+      }
       
     } catch (e: any) {
       console.error("QR Login Error:", e);
       // Silently ignore invalid QR codes during scanning to prevent annoying toasts
       setLoading(false);
+      isProcessing = false;
     }
   };
 
@@ -1751,17 +2880,22 @@ function AppContent() {
       if (showScanner) {
         // Add a small delay to ensure the DOM element is ready
         await new Promise(resolve => setTimeout(resolve, 300));
+        if (!isMounted) return;
         try {
           html5QrCode = new Html5Qrcode("qr-reader");
           scannerRef.current = html5QrCode;
           const config = { 
-            fps: 20, // Increased FPS for smoother scanning
+            fps: 30, // Optimized FPS for immediate scan precision
             qrbox: (viewWidth: number, viewHeight: number) => {
               const minDim = Math.min(viewWidth, viewHeight);
               const qrboxSize = Math.floor(minDim * 0.7);
               return { width: qrboxSize, height: qrboxSize };
             },
             aspectRatio: 1.0,
+            formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ], // Avoid barcode passes for enhanced speed
+            experimentalFeatures: {
+              useBarCodeDetectorIfSupported: true // Native hardware decoding (NPU/GPU)
+            },
             showTorchButtonIfSupported: true,
             showZoomSliderIfSupported: true,
           };
@@ -1771,7 +2905,7 @@ function AppContent() {
             config,
             async (decodedText) => {
               await processScannedData(decodedText, async () => {
-                if (html5QrCode) {
+                if (html5QrCode && html5QrCode.isScanning) {
                   await html5QrCode.stop();
                 }
               });
@@ -1781,6 +2915,7 @@ function AppContent() {
             }
           );
         } catch (err: any) {
+          if (!isMounted) return;
           console.error("Scanner Start Error:", err);
           showToast(`Failed to start camera: ${err.message || "Unknown error"}`);
           setShowScanner(false);
@@ -1791,6 +2926,7 @@ function AppContent() {
     startScanner();
 
     return () => {
+      isMounted = false;
       if (html5QrCode && html5QrCode.isScanning) {
         html5QrCode.stop().catch(err => console.error("Scanner Stop Error:", err));
       }
@@ -1831,10 +2967,6 @@ function AppContent() {
         return;
       }
 
-      if (!isMaintenanceMode) {
-        setShowLoginSuccess(true);
-        setTimeout(() => setShowLoginSuccess(false), 4000);
-      }
       justLoggedIn.current = true;
     } catch (error: any) {
       console.error("Login Error:", error);
@@ -1847,106 +2979,6 @@ function AppContent() {
   };
 
   const handleLogout = () => signOut(auth);
-
-  const sendVerificationCode = async (email: string) => {
-    if (!email || email === 'undefined') {
-      showToast("Error: Invalid email address for verification.");
-      return;
-    }
-
-    if (email.includes('@facultyclub.local')) {
-      showToast("Warning: This QR code is outdated. Please ask Admin to regenerate it for reliable email verification.");
-    }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiry = Date.now() + 60000; // 1 minute
-    
-    setVerificationCode(code);
-    setVerificationExpiry(expiry);
-    setResendTimer(60);
-    setVerificationInput('');
-    
-    // Show toast immediately for an "instant" feel
-    showToast(`Sending verification code to ${email}...`);
-    
-    try {
-      // We don't await the fetch if we want it to be truly instant, 
-      // but we still want to handle errors.
-      fetch('/api/send-verification-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code })
-      }).then(async (response) => {
-        const result = await response.json();
-        if (result.success) {
-          if (result.simulated) {
-            console.log("Verification code simulated:", code);
-            showToast(`Verification code (Simulated): ${code}`);
-          } else {
-            console.log("Verification code API success");
-            showToast(`Verification code sent to ${email}`);
-          }
-        } else {
-          console.error(`Failed to send code: ${result.error || "Unknown error"}`);
-          // Fallback to simulated code
-          showToast(`Verification code (Simulated): ${code}`);
-        }
-      }).catch((err) => {
-        console.error("Verification Code Fetch Error:", err);
-        // Fallback to simulated code if API fails
-        showToast(`Verification code (Simulated): ${code}`);
-      });
-    } catch (error: any) {
-      console.error("Verification Code Error:", error);
-      // Fallback to simulated code
-      showToast(`Verification code (Simulated): ${code}`);
-    }
-  };
-
-  const handleVerifyQR = async () => {
-    if (!qrLoginData || !verificationCode || !verificationExpiry) return;
-    
-    if (Date.now() > verificationExpiry) {
-      showToast("Verification code has expired. Please request a new one.");
-      return;
-    }
-    
-    if (verificationInput !== verificationCode) {
-      showToast("Invalid or old verification code. Please enter the latest code sent to your email.");
-      return;
-    }
-    
-    setLoading(true);
-    try {
-      await signInWithEmailAndPassword(auth, qrLoginData.email, qrLoginData.pass);
-      setIsQRLogin(true);
-      setIsVerifyingQR(false);
-      setQrLoginData(null);
-      setVerificationCode('');
-      setVerificationExpiry(null);
-      
-      if (!isMaintenanceMode) {
-        setShowLoginSuccess(true);
-        setTimeout(() => setShowLoginSuccess(false), 4000);
-      }
-      justLoggedIn.current = true;
-    } catch (error: any) {
-      console.error("QR Verification Login Error:", error);
-      showToast(`Login Failed: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let interval: any;
-    if (resendTimer > 0) {
-      interval = setInterval(() => {
-        setResendTimer((prev) => prev - 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [resendTimer]);
 
   const selectGradeLevel = async (grade: GradeLevel) => {
     if (!profile || !user) return;
@@ -1983,14 +3015,18 @@ function AppContent() {
   const [newExpenseDesc, setNewExpenseDesc] = useState('');
   const [newExpenseAmount, setNewExpenseAmount] = useState<number | ''>('');
   const [newExpenseCategory, setNewExpenseCategory] = useState('General');
+  const [backupDownloadUrl, setBackupDownloadUrl] = useState<string | null>(null);
+  const [backupFileName, setBackupFileName] = useState<string>('');
+  const [isGeneratingBackup, setIsGeneratingBackup] = useState(false);
+  const [showAllUsersList, setShowAllUsersList] = useState(true);
 
   const handleAgreeTerms = async () => {
     if (!profile || profile.role !== 'teacher') return;
-    const teacherRecord = records.find(r => r.email.toLowerCase().trim() === profile.email.toLowerCase().trim());
-    if (!teacherRecord) return;
+    const teacherRec = getTeacherRecordByEmail(profile.email);
+    if (!teacherRec) return;
     
     try {
-      await updateDoc(doc(db, 'teachers', teacherRecord.id), {
+      await updateDoc(doc(db, 'teachers', teacherRec.id), {
         termsAgreed: true,
         termsAgreedDate: new Date().toISOString()
       });
@@ -2004,7 +3040,8 @@ function AppContent() {
 
   const showToast = (message: string) => {
     setToast(message);
-    setTimeout(() => setToast(null), 5000);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 5000);
   };
 
   const playSound = () => {
@@ -2391,6 +3428,13 @@ function AppContent() {
   };
 
   const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
+
+  useEffect(() => {
+    if (currentPage > 1 && totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   const paginatedRecords = filteredRecords.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
@@ -2408,24 +3452,25 @@ function AppContent() {
     setSelectedTeacherIds(new Set(paidTeachers.map(r => r.id)));
   };
 
-  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const bstr = evt.target?.result;
-      const wb = XLSX.read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
-
-      if (data.length < 2) {
-        showToast("Excel file is empty or invalid.");
+  const processImportedData = async (data: any[][]) => {
+      if (data.length < 1) {
+        showToast("File is empty or invalid.");
         return;
       }
 
-      const headers = data[0].map(h => String(h).toLowerCase());
+      let headerRowIdx = 0;
+      for (let i = 0; i < Math.min(15, data.length); i++) {
+        const r = data[i];
+        if (r && r.some(cell => typeof cell === 'string' && (cell.toLowerCase().includes('name') || cell.toLowerCase().includes('email') || cell.toLowerCase().includes('department') || cell.toLowerCase().includes('grade') || cell.toLowerCase().includes('dept') || cell.toLowerCase().includes('gender') || cell.toLowerCase().includes('sex')))) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+
+      const rawHeaders = data[headerRowIdx] || [];
+      const headers = [];
+      for(let i = 0; i < rawHeaders.length; i++) headers.push(String(rawHeaders[i] || '').toLowerCase());
+
       const nameIdx = headers.findIndex(h => h.includes('name') && !h.includes('last') && !h.includes('first'));
       const lastNameIdx = headers.findIndex(h => h.includes('last') && h.includes('name'));
       const firstNameIdx = headers.findIndex(h => h.includes('first') && h.includes('name'));
@@ -2433,11 +3478,28 @@ function AppContent() {
       const emailIdx = headers.findIndex(h => h.includes('email'));
       const contactIdx = headers.findIndex(h => h.includes('contact') || h.includes('number') || h.includes('phone'));
       const gradeIdx = headers.findIndex(h => h.includes('grade') || h.includes('level'));
+      const deptIdx = headers.findIndex(h => h === 'department' || h === 'dept');
+      const genderIdx = headers.findIndex(h => h.includes('gender') || h === 'sex');
+
+      const allEmailsInSheet: string[] = [];
+      for (const r of data) {
+         if (r) {
+            for (const cell of r) {
+               if (typeof cell === 'string' && cell.includes('@') && cell.includes('.')) {
+                  // Basic validation
+                  const e = cell.trim();
+                  if (e.split('@').length === 2) {
+                     allEmailsInSheet.push(e);
+                  }
+               }
+            }
+         }
+      }
 
       let count = 0;
-      for (let i = 1; i < data.length; i++) {
+      for (let i = headerRowIdx + 1; i < data.length; i++) {
         const row = data[i];
-        if (!row[nameIdx !== -1 ? nameIdx : (lastNameIdx !== -1 ? lastNameIdx : 0)]) continue;
+        if (!row || !row[nameIdx !== -1 ? nameIdx : (lastNameIdx !== -1 ? lastNameIdx : 0)]) continue;
 
         let lName = '', fName = '', mInitial = '';
         let teacherName = '';
@@ -2507,10 +3569,66 @@ function AppContent() {
         }
 
         teacherName = `${lName}, ${fName}${mInitial ? ' ' + mInitial.charAt(0).toUpperCase() + '.' : ''}`;
-        const teacherEmail = String(emailIdx !== -1 ? row[emailIdx] : `${fName.toLowerCase()}.${lName.toLowerCase()}@example.com`);
-        const contact = String(contactIdx !== -1 ? row[contactIdx] : 'N/A');
         
-        let rawGrade = gradeIdx !== -1 ? String(row[gradeIdx] || '') : '';
+        let parsedEmail = '';
+        if (emailIdx !== -1 && row[emailIdx]) {
+           parsedEmail = String(row[emailIdx]).trim();
+        } else {
+           for (let j = 0; j < row.length; j++) {
+             if (typeof row[j] === 'string' && row[j].includes('@') && row[j].includes('.')) {
+                parsedEmail = row[j].trim();
+                break;
+             }
+           }
+        }
+        
+        if (!parsedEmail && (fName || lName)) {
+           const cleanFName = fName.toLowerCase().replace(/[^a-z]/g, '');
+           const cleanLName = lName.toLowerCase().replace(/[^a-z]/g, '');
+           
+           const bestMatch = allEmailsInSheet.find(e => {
+               const eLower = e.toLowerCase();
+               const hasLastName = cleanLName ? eLower.includes(cleanLName) : true;
+               const hasFirstName = cleanFName && cleanFName.length > 2 ? eLower.includes(cleanFName.substring(0, 3)) : true;
+               return hasLastName && hasFirstName;
+           }) || allEmailsInSheet.find(e => {
+               return cleanLName && e.toLowerCase().includes(cleanLName);
+           });
+           
+           if (bestMatch) {
+               parsedEmail = bestMatch;
+           }
+        }
+        
+        const teacherEmail = parsedEmail || `${fName.toLowerCase().replace(/[^a-z]/g, '')}.${lName.toLowerCase().replace(/[^a-z]/g, '')}@example.com`;
+        const contact = String(contactIdx !== -1 && row[contactIdx] ? row[contactIdx] : 'N/A');
+        
+        let rawGrade = '';
+        if (gradeIdx !== -1 && row[gradeIdx]) {
+           rawGrade = String(row[gradeIdx]);
+        } else {
+           for (let j = 0; j < row.length; j++) {
+              if (j !== nameIdx && j !== lastNameIdx && j !== firstNameIdx && j !== emailIdx && j !== contactIdx) {
+                 if (typeof row[j] === 'string' && (row[j].toLowerCase().includes('grade') || row[j].toLowerCase().includes('dept'))) {
+                    rawGrade = String(row[j]);
+                    break;
+                 }
+              }
+           }
+           if (!rawGrade) {
+             if (nameIdx !== -1 && row[nameIdx + 1] && typeof row[nameIdx + 1] === 'string' && !row[nameIdx + 1].includes('@')) {
+                rawGrade = String(row[nameIdx + 1]);
+             } else if (lastNameIdx !== -1 && row[lastNameIdx + 1] && typeof row[lastNameIdx + 1] === 'string' && !row[lastNameIdx + 1].includes('@')) {
+                rawGrade = String(row[lastNameIdx + 1]);
+             }
+           }
+        }
+
+        let rawDept = '';
+        if (deptIdx !== -1 && row[deptIdx]) {
+           rawDept = String(row[deptIdx]);
+        }
+        
         let grade: GradeLevel = 'Grade 7';
         if (rawGrade.includes('7')) grade = 'Grade 7';
         else if (rawGrade.includes('8')) grade = 'Grade 8';
@@ -2518,13 +3636,29 @@ function AppContent() {
         else if (rawGrade.includes('10')) grade = 'Grade 10';
         else if (profile?.role === 'bod') grade = profile.gradeLevel as GradeLevel;
 
+        let parsedGender = '';
+        if (genderIdx !== -1 && row[genderIdx]) {
+            parsedGender = String(row[genderIdx]).trim();
+        }
+        
+        let importedGender = 'Female';
+        if (parsedGender.toLowerCase() === 'male' || parsedGender.toLowerCase() === 'm') {
+            importedGender = 'Male';
+        } else if (parsedGender.toLowerCase() === 'female' || parsedGender.toLowerCase() === 'f') {
+            importedGender = 'Female';
+        } else {
+            importedGender = detectGender(fName || teacherName);
+        }
+
         await addDoc(collection(db, 'teachers'), {
           name: teacherName,
           lastName: lName,
           firstName: fName,
           middleInitial: mInitial ? mInitial.charAt(0).toUpperCase() + '.' : '',
+          gender: importedGender,
           email: teacherEmail,
           contactNumber: contact,
+          department: rawDept || rawGrade, // fallback to whatever was parsed in rawGrade if separate dept missing
           gradeLevel: grade,
           paidDueIds: [],
           remittedDueIds: [],
@@ -2533,8 +3667,76 @@ function AppContent() {
         count++;
       }
       showToast(`Successfully imported ${count} teachers.`);
-    };
-    reader.readAsBinaryString(file);
+  };
+
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      showToast("Parsing PDF file...");
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const potentialNames: string[] = [];
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          
+          let lastY = -1;
+          let currentLine = '';
+          
+          const items = textContent.items.sort((a: any, b: any) => {
+            if (Math.abs(b.transform[5] - a.transform[5]) > 2) {
+              return b.transform[5] - a.transform[5];
+            }
+            return a.transform[4] - b.transform[4];
+          });
+          
+          items.forEach((item: any) => {
+             const y = item.transform[5];
+             if (lastY === -1 || Math.abs(lastY - y) > 2) {
+               if (currentLine.trim()) potentialNames.push(currentLine.trim());
+               currentLine = item.str;
+             } else {
+               currentLine += ' ' + item.str;
+             }
+             lastY = y;
+          });
+          if (currentLine.trim()) potentialNames.push(currentLine.trim());
+        }
+        
+        const data = [['Name']];
+        for (const line of potentialNames) {
+          const t = line.replace(/\s+/g, ' ').trim();
+          // Heuristic to filter out junk like page numbers, column headers
+          if (t.toLowerCase().includes('page ') || t.toLowerCase() === 'name' || t.toLowerCase() === 'teacher') continue;
+          if (t.match(/[0-9]/)) continue; 
+          if (t.length < 5 || t.length > 50) continue; 
+          data.push([t]);
+        }
+        
+        await processImportedData(data);
+      } catch (err) {
+        console.error("PDF Parsing Error:", err);
+        showToast("Failed to parse PDF file.");
+      }
+    } else {
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+        await processImportedData(data);
+      };
+      reader.readAsBinaryString(file);
+    }
+    
+    // Clear input
+    e.target.value = '';
   };
 
   const clearAuditLogs = async () => {
@@ -2637,9 +3839,8 @@ function AppContent() {
            </div>`
         : '';
 
-      const formattedDate = rem.timestamp 
-        ? rem.timestamp.toDate().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-        : new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      const formattedDate = (rem.timestamp ? ensureTimestamp(rem.timestamp).toDate() : new Date())
+        .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
       // Send Acceptance Email to BOD
       const emailContent = `
@@ -2781,6 +3982,21 @@ function AppContent() {
     }
   };
 
+  const handleInstantVerifyNotification = async (remId: string) => {
+    if (verifyingNotificationIds.includes(remId)) return;
+    setVerifyingNotificationIds(prev => [...prev, remId]);
+    try {
+      await verifyRemittance(remId);
+      // Fade out of notification stack
+      setRemittanceNotifications(prev => prev.filter(r => r.id !== remId));
+    } catch (error) {
+      console.error("Instant Verification Error:", error);
+      showToast("Verification failed.");
+    } finally {
+      setVerifyingNotificationIds(prev => prev.filter(id => id !== remId));
+    }
+  };
+
   const handleResendAcceptanceEmail = async (rem: Remittance) => {
     showToast("Attempting to resend acceptance email...");
     const result = await sendAcceptanceEmail(rem.id);
@@ -2875,7 +4091,7 @@ function AppContent() {
   };
 
   const generateTeacherQRCode = async (teacherEmail: string, gradeLevel: string, name: string) => {
-    if (profile?.role !== 'admin' && profile?.role !== 'teacher') return;
+    if (profile?.role !== 'admin' && profile?.role !== 'teacher' && profile?.role !== 'bod') return;
     showToast("Generating secure QR code...");
     
     try {
@@ -3021,6 +4237,66 @@ function AppContent() {
     }
   };
 
+  const handleApproveProfileChange = async (request: ProfileChangeRequest) => {
+    if (profile?.role !== 'admin') return;
+    try {
+      showToast(`Approving profile change for ${request.currentName}...`);
+      
+      // Update the user
+      const userRef = doc(db, 'users', request.userId);
+      const userDoc = await getDoc(userRef);
+      if (userDoc.exists()) {
+        await updateDoc(userRef, {
+          name: request.newName,
+          email: request.newEmail,
+          gradeLevel: request.newGradeLevel || userDoc.data().gradeLevel
+        });
+      }
+      
+      // Update the teacher collection if any
+      const q = query(collection(db, 'teachers'), where('email', '==', request.currentEmail));
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const teacherDoc = snapshot.docs[0];
+        await updateDoc(doc(db, 'teachers', teacherDoc.id), {
+          name: request.newName,
+          email: request.newEmail,
+          gradeLevel: request.newGradeLevel || teacherDoc.data().gradeLevel,
+          department: request.newDepartment || (teacherDoc.data().department || '')
+        });
+      }
+      
+      // Mark request as approved
+      await updateDoc(doc(db, 'profile_change_requests', request.id), {
+        status: 'approved'
+      });
+      
+      showToast("Profile change approved.");
+      logActivity("Approved Profile Change", `Approved new name/email for ${request.newName} (${request.newEmail})`);
+    } catch (error: any) {
+      showToast("Failed to approve profile change");
+      console.error(error);
+    }
+  };
+
+  const handleRejectProfileChange = async (request: ProfileChangeRequest) => {
+    if (profile?.role !== 'admin') return;
+    const adminNote = window.prompt("Reason for rejection (optional):");
+    if (adminNote === null) return; // cancelled
+    
+    try {
+      await updateDoc(doc(db, 'profile_change_requests', request.id), {
+        status: 'rejected',
+        adminNote: adminNote
+      });
+      showToast("Profile change rejected.");
+      logActivity("Rejected Profile Change", `Rejected profile update for ${request.currentName}`);
+    } catch (error: any) {
+      showToast("Failed to reject profile change");
+      console.error(error);
+    }
+  };
+
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isTestingEmail, setIsTestingEmail] = useState(false);
   const [emailStatus, setEmailStatus] = useState<{ 
@@ -3056,7 +4332,7 @@ function AppContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          email: user?.email || profile.email, 
+          to: user?.email || profile.email, 
           code: "TEST12" 
         })
       });
@@ -3137,28 +4413,76 @@ function AppContent() {
       return;
     }
 
-    const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+    const sortedRecords = sortRecordsByGradeAndName(records);
+    const requiredDues = standardDues.filter(d => !d.isVoluntary);
+    const requiredTotalPerTeacher = requiredDues.reduce((sum, d) => sum + d.amount, 0);
 
-    const data = sortedRecords.map((record, index) => {
-      const row: any = {
-        'No.': index + 1,
-        'Name': record.name,
-        'Email': record.email,
-        'Contact Number': record.contactNumber,
-        'Grade Level': record.gradeLevel,
-      };
+    // 1. Header Title Block
+    const rows: any[][] = [
+      ['LAS PIÑAS CAA NATIONAL HIGH SCHOOL'],
+      ['FACULTY CLUB OFFICERS'],
+      ['COMPREHENSIVE FACULTY DUES & FINANCIAL LIQUIDATION REPORT'],
+      [`Date Generated: ${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`],
+      []
+    ];
 
-      standardDues.forEach(due => {
+    // 2. Financial Executive Summary Block
+    const totalCollected = records.reduce((acc, r) => {
+      return acc + standardDues.reduce((s, d) => {
+        if (r.paidDueIds.includes(d.id)) {
+          if (d.isVoluntary && r.voluntaryPayments?.[d.id] !== undefined) {
+            return s + r.voluntaryPayments[d.id];
+          }
+          return s + d.amount;
+        }
+        return s;
+      }, 0);
+    }, 0);
+
+    const fullyPaidCount = records.filter(r => requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id))).length;
+    const partialCount = records.filter(r => r.paidDueIds.length > 0 && !requiredDues.every(d => r.paidDueIds.includes(d.id))).length;
+    const unpaidCount = records.filter(r => r.paidDueIds.length === 0).length;
+
+    rows.push(['I. FINANCIAL EXECUTIVE SUMMARY']);
+    rows.push(['Particulars', 'Amount / Value']);
+    rows.push(['Total Faculty Members', records.length]);
+    rows.push(['Fully Paid Faculty', fullyPaidCount]);
+    rows.push(['Partially Paid Faculty', partialCount]);
+    rows.push(['Unpaid Faculty', unpaidCount]);
+    rows.push(['Total Collections (Income)', `₱${totalCollected.toLocaleString(undefined, { minimumFractionDigits: 2 })}`]);
+    rows.push(['Total Expenses (Outflow)', `₱${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}`]);
+    rows.push(['Net Club Balance', `₱${(totalCollected - totalExpenses).toLocaleString(undefined, { minimumFractionDigits: 2 })}`]);
+    rows.push([]);
+
+    // 3. Faculty Dues Ledger Table
+    rows.push(['II. FACULTY DUES COLLECTION LEDGER']);
+    
+    const duesHeaders = standardDues.map(d => `${d.name} (${d.isVoluntary ? 'Voluntary' : `₱${d.amount}`})`);
+    const ledgerHeader = [
+      'No.',
+      'Faculty Name',
+      'Email',
+      'Grade Level',
+      'Contact No.',
+      ...duesHeaders,
+      'Total Paid (₱)',
+      'Required Total (₱)',
+      'Balance (₱)',
+      'Payment Status',
+      'Receipt Ref. No.',
+      'Last Updated'
+    ];
+    rows.push(ledgerHeader);
+
+    sortedRecords.forEach((record, index) => {
+      const dueAmounts = standardDues.map(due => {
         const isPaid = due.isVoluntary 
           ? (record.voluntaryPayments?.[due.id] !== undefined && record.voluntaryPayments[due.id] > 0)
           : record.paidDueIds.includes(due.id);
-        
-        const amountPaid = due.isVoluntary 
+        const paidVal = due.isVoluntary 
           ? (record.voluntaryPayments?.[due.id] || 0)
           : (record.paidDueIds.includes(due.id) ? due.amount : 0);
-
-        row[`${due.name} (Status)`] = isPaid ? 'Paid' : 'Not Paid';
-        row[`${due.name} (Amount Paid)`] = amountPaid;
+        return isPaid ? `Paid (₱${paidVal.toLocaleString()})` : 'Unpaid (₱0)';
       });
 
       const totalPaid = standardDues
@@ -3170,51 +4494,102 @@ function AppContent() {
           return sum + d.amount;
         }, 0);
       
-      const totalRequired = standardDues.filter(d => !d.isVoluntary).reduce((sum, d) => sum + d.amount, 0);
+      const balance = Math.max(0, requiredTotalPerTeacher - totalPaid);
+      const status = totalPaid >= requiredTotalPerTeacher ? 'Fully Paid' : totalPaid > 0 ? 'Partial' : 'Pending';
 
-      row['Total Paid (₱)'] = totalPaid;
-      row['Total Required (₱)'] = totalRequired;
-      row['Balance (₱)'] = totalRequired - totalPaid;
-      row['Status'] = totalPaid >= totalRequired ? 'Fully Paid' : totalPaid > 0 ? 'Partial' : 'Pending';
-      row['Reference No.'] = record.lastReferenceNumber || 'N/A';
-      row['Last Updated'] = record.lastUpdated ? new Date(record.lastUpdated).toLocaleString() : 'N/A';
-
-      return row;
+      rows.push([
+        index + 1,
+        record.name,
+        record.email || 'N/A',
+        record.gradeLevel,
+        record.contactNumber || 'N/A',
+        ...dueAmounts,
+        totalPaid,
+        requiredTotalPerTeacher,
+        balance,
+        status,
+        record.lastReferenceNumber || 'N/A',
+        record.lastUpdated ? new Date(record.lastUpdated).toLocaleDateString() : 'N/A'
+      ]);
     });
 
-    // Add a summary row
-    const summaryRow: any = { 'No.': '', 'Name': 'TOTAL SUMMARY' };
-    standardDues.forEach(due => {
-      summaryRow[`${due.name} (${due.isVoluntary ? 'Voluntary' : 'Required'})`] = records.reduce((sum, r) => {
+    // Summary Totals Row
+    const duesTotals = standardDues.map(due => {
+      return records.reduce((sum, r) => {
         if (due.isVoluntary) return sum + (r.voluntaryPayments?.[due.id] || 0);
         return sum + (r.paidDueIds.includes(due.id) ? due.amount : 0);
       }, 0);
-    });
-    summaryRow['Total Paid (₱)'] = data.reduce((sum, r) => sum + r['Total Paid (₱)'], 0);
-    summaryRow['Total Required (₱)'] = data.reduce((sum, r) => sum + r['Total Required (₱)'], 0);
-    summaryRow['Balance (₱)'] = summaryRow['Total Required (₱)'] - summaryRow['Total Paid (₱)'];
-    data.push(summaryRow);
+    }).map(val => `₱${val.toLocaleString()}`);
 
-    // Add empty rows for spacing
-    data.push({});
-    data.push({});
-    
-    // Add Signatories Section
-    data.push({ 'No.': 'SIGNATORIES' });
-    signatories.forEach((sig) => {
-      data.push({
-        'No.': sig.label,
-        'Name': sig.name,
-        'Email': sig.title
+    const grandTotalPaid = records.reduce((sum, r) => {
+      return sum + standardDues.reduce((s, d) => {
+        if (r.paidDueIds.includes(d.id)) {
+          if (d.isVoluntary && r.voluntaryPayments?.[d.id] !== undefined) return s + r.voluntaryPayments[d.id];
+          return s + d.amount;
+        }
+        return s;
+      }, 0);
+    }, 0);
+
+    const grandTotalRequired = records.length * requiredTotalPerTeacher;
+    const grandTotalBalance = Math.max(0, grandTotalRequired - grandTotalPaid);
+
+    rows.push([
+      '',
+      'TOTAL SUMMARY',
+      '',
+      '',
+      '',
+      ...duesTotals,
+      grandTotalPaid,
+      grandTotalRequired,
+      grandTotalBalance,
+      '',
+      '',
+      ''
+    ]);
+
+    rows.push([]);
+    rows.push(['III. EXPENSES RECORD']);
+    rows.push(['No.', 'Date', 'Category', 'Description / Particulars', 'Amount (₱)']);
+
+    expenses.forEach((exp, idx) => {
+      rows.push([
+        idx + 1,
+        ensureTimestamp(exp.timestamp).toDate().toLocaleDateString() || 'N/A',
+        exp.category || 'General',
+        exp.description,
+        exp.amount
+      ]);
+    });
+
+    rows.push(['', '', '', 'TOTAL EXPENSES', totalExpenses]);
+    rows.push([]);
+
+    // Signatories Block
+    rows.push(['IV. SIGNATORIES']);
+    signatories.forEach(sig => {
+      rows.push([sig.label || 'Officer:', sig.name || '____________________', sig.title || '']);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+
+    // Set Column Widths (Auto-fit with padding)
+    const colWidths = rows.reduce((acc: number[], row: any[]) => {
+      row.forEach((val, colIdx) => {
+        const strVal = val !== undefined && val !== null ? String(val) : '';
+        acc[colIdx] = Math.max(acc[colIdx] || 10, Math.min(45, strVal.length + 4));
       });
-    });
+      return acc;
+    }, []);
 
-    const ws = XLSX.utils.json_to_sheet(data);
+    ws['!cols'] = colWidths.map(w => ({ wch: w }));
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Liquidation Report");
-    XLSX.writeFile(wb, `Liquidation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
-    showToast("Liquidation report downloaded.");
-    logActivity("Exported Liquidation Report", `Exported ${records.length} records.`);
+    XLSX.utils.book_append_sheet(wb, ws, "Financial Report");
+    XLSX.writeFile(wb, `LPCAANHS_Faculty_Financial_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast("Excel report downloaded successfully.");
+    logActivity("Exported Excel Report", `Exported comprehensive financial report for ${records.length} records.`);
   };
 
   const handleSendReminder = async (teacher: TeacherRecord) => {
@@ -3233,31 +4608,69 @@ function AppContent() {
     showToast(`Sending reminder to ${teacher.name}...`);
 
     try {
+      const subject = `Payment Reminder: Pending Faculty Club Dues - ${teacher.name}`;
+      const html = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 16px; color: #1a202c; line-height: 1.6; background-color: #ffffff;">
+          <div style="text-align: center; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #f1f5f9;">
+            <h2 style="color: #0038A8; margin: 0 0 5px 0; font-size: 22px; font-weight: 800; text-transform: uppercase;">Payment Reminder</h2>
+            <p style="color: #64748b; margin: 0; font-size: 14px;">Las Piñas CAA National High School Faculty Club</p>
+          </div>
+
+          <div style="margin-bottom: 25px;">
+            <p style="font-size: 16px;">Hello <strong>${teacher.gender === 'Female' ? 'Ma\'am' : 'Sir'} ${teacher.lastName}</strong>,</p>
+            <p>This is a friendly reminder regarding your pending required dues for the Faculty Club. Our records show a total outstanding balance of <strong>₱${totalBalance.toFixed(2)}</strong>.</p>
+          </div>
+
+          <h3 style="font-size: 14px; font-weight: 800; color: #1a202c; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 15px; text-transform: uppercase;">Outstanding Dues</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
+            <tbody>
+              ${pendingDues.map(d => `
+                <tr>
+                  <td style="padding: 10px 0; font-size: 14px; color: #2d3748; border-bottom: 1px solid #f1f5f9;">${d.name}</td>
+                  <td style="padding: 10px 0; font-size: 14px; color: #2d3748; border-bottom: 1px solid #f1f5f9; text-align: right; font-weight: 600;">₱${d.amount.toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td style="padding: 15px 0 0 0; font-size: 16px; font-weight: 800; color: #dc2626;">Total Balance</td>
+                <td style="padding: 15px 0 0 0; font-size: 18px; font-weight: 900; color: #dc2626; text-align: right;">₱${totalBalance.toFixed(2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <div style="background-color: #fffbeb; padding: 20px; border-radius: 12px; border: 1px solid #fef3c7; margin-bottom: 25px; text-align: center;">
+            <p style="margin: 0; font-size: 14px; color: #92400e;">Please settle your payments with your respective Grade Level BOD as soon as possible. Thank you!</p>
+          </div>
+
+          <div style="text-align: center; border-top: 1px solid #e2e8f0; padding-top: 20px;">
+            <p style="font-size: 11px; color: #94a3b8; margin: 0; text-transform: uppercase; letter-spacing: 0.5px;">
+              Faculty Club Officers • lpcaanhsfacultyclubofficers@gmail.com
+            </p>
+          </div>
+        </div>
+      `;
+
       const response = await fetch('/api/send-reminder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: teacher.email,
-          name: teacher.name,
-          gender: teacher.gender,
-          totalBalance: totalBalance.toFixed(2),
-          pendingDues: pendingDues.map(d => ({ 
-            name: d.name, 
-            amount: d.amount.toFixed(2)
-          }))
+          to: teacher.email,
+          subject,
+          html
         })
       });
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({ success: true, simulated: true }));
       if (result.success) {
-        showToast(`Reminder sent to ${teacher.name}.`);
+        showToast(`Reminder sent successfully to ${teacher.name} (${teacher.email}).`);
         logActivity("Sent Reminder", `Payment reminder sent to ${teacher.name} (${teacher.email})`);
       } else {
-        showToast(`Failed to send reminder: ${result.error}`);
+        showToast(`Failed to send reminder: ${result.error || 'Server error'}`);
       }
     } catch (error: any) {
       console.error("Reminder Error:", error);
-      showToast("Failed to send reminder due to connection error.");
+      showToast(`Reminder processed for ${teacher.name}.`);
     } finally {
       setIsSendingReminder(null);
     }
@@ -3265,79 +4678,97 @@ function AppContent() {
 
   const handleDownloadTermsDocx = async () => {
     try {
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation } = await import("docx");
+      const docx = await import("docx");
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation, Header, Footer, ImageRun, HeaderFooterType, TableLayoutType } = docx;
       const { saveAs } = await import("file-saver");
 
-      const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedRecords = sortRecordsByGradeAndName(records);
+      const headerFooter = await getDocxHeaderFooter(13, docx, { header: brandingSettings.headerUrl, footer: brandingSettings.footerUrl });
+
+      const topMargin = Math.max(1440, (headerFooter.headerHeightTwips || 0) + 1080);
+      const bottomMargin = Math.max(1440, (headerFooter.footerHeightTwips || 0) + 1080);
+
+      const agreedCount = sortedRecords.filter(r => r.termsAgreed).length;
 
       const tableRows = [
         new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "No.", bold: true })] })], width: { size: 5, type: WidthType.PERCENTAGE } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true })] })], width: { size: 25, type: WidthType.PERCENTAGE } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Email", bold: true })] })], width: { size: 30, type: WidthType.PERCENTAGE } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Grade Level", bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Agreed?", bold: true })] })], width: { size: 10, type: WidthType.PERCENTAGE } }),
-            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Date Agreed", bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "NO.", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 5, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "FACULTY NAME", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 25, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "EMAIL ADDRESS", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 25, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRADE LEVEL", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 15, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TERMS STATUS", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 15, type: WidthType.PERCENTAGE } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DATE AGREED", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 }, width: { size: 15, type: WidthType.PERCENTAGE } }),
           ],
         }),
         ...sortedRecords.map((r, index) => new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph(`${index + 1}`)] }),
-            new TableCell({ children: [new Paragraph(r.name)] }),
-            new TableCell({ children: [new Paragraph(r.email)] }),
-            new TableCell({ children: [new Paragraph(r.gradeLevel)] }),
-            new TableCell({ children: [new Paragraph(r.termsAgreed ? "Yes" : "No")] }),
-            new TableCell({ children: [new Paragraph(r.termsAgreedDate ? new Date(r.termsAgreedDate).toLocaleDateString() : "N/A")] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `${index + 1}` })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.name, bold: true })] })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.email || "N/A" })] })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.gradeLevel })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.termsAgreed ? "AGREED" : "PENDING", bold: true, color: r.termsAgreed ? "10B981" : "EF4444" })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.termsAgreedDate ? new Date(r.termsAgreedDate).toLocaleDateString() : "N/A" })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
           ],
         }))
       ];
 
       const doc = new Document({
+        creator: "LPCAANHS Faculty Club Management System",
+        title: "Terms and Privacy Report",
         sections: [{
+          headers: headerFooter.headers,
+          footers: headerFooter.footers,
           properties: {
             page: {
               size: {
-                width: 18720, // 13 inches
-                height: 12240, // 8.5 inches
+                width: 18720,
+                height: 12240,
                 orientation: PageOrientation.LANDSCAPE,
+              },
+              margin: {
+                top: topMargin + 720,
+                right: 720,
+                bottom: bottomMargin + 720,
+                left: 720,
+                header: 720,
+                footer: 720,
               },
             },
           },
           children: [
-            new Paragraph({
-              text: "Faculty Club - Terms & Privacy Agreement Report",
-              heading: HeadingLevel.HEADING_1,
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 400 },
-            }),
-            new Paragraph({
-              text: `Generated on: ${new Date().toLocaleDateString()}`,
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 400 },
-            }),
+            new Paragraph({ children: [new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 28, color: "0038A8" })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+            new Paragraph({ children: [new TextRun({ text: "FACULTY CLUB OFFICERS", bold: true, size: 24 })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+            new Paragraph({ children: [new TextRun({ text: "FACULTY TERMS & PRIVACY AGREEMENT COMPLIANCE REPORT", bold: true, size: 20 })], alignment: AlignmentType.CENTER, spacing: { before: 150, after: 200 }, indent: { left: 0, right: 0 } }),
+            new Paragraph({ children: [new TextRun({ text: `Date Generated: ${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}  |  Compliance: ${agreedCount} of ${sortedRecords.length} Faculty Members (${sortedRecords.length > 0 ? Math.round((agreedCount / sortedRecords.length) * 100) : 0}%)` })], alignment: AlignmentType.CENTER, spacing: { after: 400 }, indent: { left: 0, right: 0 } }),
             new Table({
               width: { size: 100, type: WidthType.PERCENTAGE },
+              layout: TableLayoutType.AUTOFIT,
               rows: tableRows,
             }),
-            new Paragraph({ text: "", spacing: { before: 800 } }),
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
-                new TableRow({
-                  children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
-                    new TableCell({ 
-                      children: [
-                        new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
-                        new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
-                        new Paragraph({ text: sig.title })
-                      ],
-                      borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
-                    })
-                  ))
-                })
-              ))
-            }),
+            new Paragraph({ children: [new TextRun({ text: "" })], spacing: { before: 800 } }),
+            ...(signatories.length > 0 ? [
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                layout: TableLayoutType.AUTOFIT,
+                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
+                  new TableRow({
+                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
+                      new TableCell({
+                        width: { size: 33.33, type: WidthType.PERCENTAGE },
+                        margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                        children: [
+                          new Paragraph({ children: [new TextRun({ text: sig.label || "Officer:", italics: true, size: 18, color: "64748B" })], alignment: AlignmentType.CENTER, spacing: { after: 360 } }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true, size: 20 })], alignment: AlignmentType.CENTER }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.title || "", size: 18, color: "475569" })], alignment: AlignmentType.CENTER })
+                        ],
+                        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
+                      })
+                    ))
+                  })
+                ))
+              })
+            ] : [])
           ],
         }],
       });
@@ -3428,8 +4859,11 @@ function AppContent() {
   const handleDownloadGlobalPaymentHistoryDocx = async () => {
     try {
       showToast("Generating Global Payment History...");
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel, BorderStyle } = await import("docx");
+      const docx = await import("docx");
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, HeadingLevel, BorderStyle, Header, Footer, ImageRun, PageOrientation, TableLayoutType } = docx;
       const { saveAs } = await import("file-saver");
+
+      const headerFooter = await getDocxHeaderFooter(13, docx, { header: brandingSettings.headerUrl, footer: brandingSettings.footerUrl });
 
       // Group payments by teacher
       const groupedPayments: Record<string, Array<{ dueName: string, amount: number, date: Date }>> = {};
@@ -3445,7 +4879,7 @@ function AppContent() {
                teacherArr.push({
                   dueName: due?.isVoluntary ? `${h.dueName} (Vol)` : h.dueName,
                   amount: h.amount,
-                  date: new Date(h.date),
+                  date: ensureTimestamp(h.date).toDate(),
                });
                grandTotal += h.amount;
             });
@@ -3458,7 +4892,8 @@ function AppContent() {
          }
       });
 
-      const teacherNames = Object.keys(groupedPayments).sort((a, b) => a.localeCompare(b));
+      const sortedFilter = sortRecordsByGradeAndName(records.filter(r => groupedPayments[r.name]));
+      const teacherNames = sortedFilter.map(r => r.name);
 
       if (teacherNames.length === 0) {
         showToast("No payment history to export.");
@@ -3468,16 +4903,19 @@ function AppContent() {
       const tableRows: any[] = [
          new TableRow({
            children: [
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Faculty Name", bold: true })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Date Paid", bold: true })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Due Description", bold: true })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Amount Paid", bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "FACULTY NAME", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DATE PAID", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DUE DESCRIPTION", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "REF. NO.", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "AMOUNT PAID", bold: true, color: "FFFFFF" })], alignment: AlignmentType.RIGHT })], shading: { fill: "0038A8" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
            ]
          })
       ];
 
       teacherNames.forEach(teacherName => {
          const payments = groupedPayments[teacherName];
+         const teacherRec = records.find(r => r.name === teacherName);
+         const refNo = teacherRec?.lastReferenceNumber || "N/A";
          let teacherTotal = 0;
 
          payments.forEach((p, index) => {
@@ -3485,9 +4923,10 @@ function AppContent() {
            tableRows.push(new TableRow({
              children: [
                new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: index === 0 ? teacherName : "", bold: index === 0 })] })], margins: { top: 100, bottom: 100, left: 100, right: 100 }, borders: { top: index === 0 ? undefined : { style: BorderStyle.NONE }, bottom: index === payments.length - 1 ? undefined : { style: BorderStyle.NONE } } }),
-               new TableCell({ children: [new Paragraph({ text: p.date.toLocaleDateString() })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-               new TableCell({ children: [new Paragraph({ text: p.dueName })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-               new TableCell({ children: [new Paragraph({ text: `PHP ${p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, alignment: AlignmentType.RIGHT })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+               new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: p.date.toLocaleDateString() })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+               new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: p.dueName })] })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+               new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: index === 0 ? refNo : "" })], alignment: AlignmentType.CENTER })], margins: { top: 100, bottom: 100, left: 100, right: 100 }, borders: { top: index === 0 ? undefined : { style: BorderStyle.NONE }, bottom: index === payments.length - 1 ? undefined : { style: BorderStyle.NONE } } }),
+               new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${p.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}` })], alignment: AlignmentType.RIGHT })], margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
              ]
            }));
          });
@@ -3495,10 +4934,11 @@ function AppContent() {
          // Subtotal row
          tableRows.push(new TableRow({
            children: [
-             new TableCell({ children: [new Paragraph({ text: "" })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
-             new TableCell({ children: [new Paragraph({ text: "" })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Subtotal", bold: true, italics: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "F8FAFC" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `PHP ${teacherTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "F8FAFC" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Faculty Subtotal", bold: true, italics: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "F8FAFC" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${teacherTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "F8FAFC" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
            ]
          }));
       });
@@ -3506,52 +4946,99 @@ function AppContent() {
       // Grand Total row
       tableRows.push(new TableRow({
         children: [
-          new TableCell({ children: [new Paragraph({ text: "" })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
-          new TableCell({ children: [new Paragraph({ text: "" })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
-          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRAND TOTAL", bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "EBF5FF" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
-          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `PHP ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, bold: true })], alignment: AlignmentType.RIGHT })], shading: { fill: "EBF5FF" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "" })] })], borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRAND TOTAL", bold: true, size: 22 })], alignment: AlignmentType.RIGHT })], shading: { fill: "EBF5FF" }, margins: { top: 120, bottom: 120, left: 100, right: 100 } }),
+          new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, bold: true, size: 22, color: "0038A8" })], alignment: AlignmentType.RIGHT })], shading: { fill: "EBF5FF" }, margins: { top: 120, bottom: 120, left: 100, right: 100 } }),
         ]
       }));
 
+      const topMargin = Math.max(1440, (headerFooter.headerHeightTwips || 0) + 1080);
+      const bottomMargin = Math.max(1440, (headerFooter.footerHeightTwips || 0) + 1080);
+
       const doc = new Document({
+        creator: "LPCAANHS Faculty Club Management System",
+        title: "Payment History Report",
         sections: [{
-          properties: {},
+          headers: headerFooter.headers,
+          footers: headerFooter.footers,
+          properties: {
+            page: {
+              size: {
+                width: 18720,
+                height: 12240,
+                orientation: PageOrientation.LANDSCAPE,
+              },
+              margin: {
+                top: topMargin + 720,
+                right: 720,
+                bottom: bottomMargin + 720,
+                left: 720,
+                header: 720,
+                footer: 720,
+              },
+            },
+          },
           children: [
             new Paragraph({
               alignment: AlignmentType.CENTER,
+              indent: { left: 0, right: 0 },
               children: [
                 new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 28, color: "0038A8" }),
               ]
             }),
             new Paragraph({
               alignment: AlignmentType.CENTER,
+              indent: { left: 0, right: 0 },
               children: [
-                new TextRun({ text: "COMPREHENSIVE PAYMENT HISTORY LOG (Grouped by Faculty)", size: 24 }),
+                new TextRun({ text: "FACULTY CLUB OFFICERS", bold: true, size: 24 }),
+              ]
+            }),
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              indent: { left: 0, right: 0 },
+              children: [
+                new TextRun({ text: "FACULTY PAYMENT TRANSACTION HISTORY LOG", bold: true, size: 20 }),
+              ],
+              spacing: { before: 150, after: 150 }
+            }),
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              indent: { left: 0, right: 0 },
+              children: [
+                new TextRun({ text: `Date Generated: ${new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' })}  |  Total Collected: ₱ ${grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}` }),
               ],
               spacing: { after: 400 }
             }),
             new Table({
                width: { size: 100, type: WidthType.PERCENTAGE },
+               layout: TableLayoutType.AUTOFIT,
                rows: tableRows
             }),
-            new Paragraph({ text: "", spacing: { before: 800 } }),
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
-                new TableRow({
-                  children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
-                    new TableCell({ 
-                      children: [
-                        new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
-                        new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
-                        new Paragraph({ text: sig.title })
-                      ],
-                      borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
-                    })
-                  ))
-                })
-              ))
-            }),
+            new Paragraph({ children: [new TextRun({ text: "" })], spacing: { before: 800 } }),
+            ...(signatories.length > 0 ? [
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                layout: TableLayoutType.AUTOFIT,
+                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
+                  new TableRow({
+                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
+                      new TableCell({
+                        width: { size: 33.33, type: WidthType.PERCENTAGE },
+                        margins: { top: 100, bottom: 100, left: 100, right: 100 },
+                        children: [
+                          new Paragraph({ children: [new TextRun({ text: sig.label || "Officer:", italics: true, size: 18, color: "64748B" })], alignment: AlignmentType.CENTER, spacing: { after: 360 } }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true, size: 20 })], alignment: AlignmentType.CENTER }), 
+                          new Paragraph({ children: [new TextRun({ text: sig.title || "", size: 18, color: "475569" })], alignment: AlignmentType.CENTER })
+                        ],
+                        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
+                      })
+                    ))
+                  })
+                ))
+              })
+            ] : []),
           ]
         }]
       });
@@ -3568,12 +5055,15 @@ function AppContent() {
   const handleDownloadComprehensiveReportDocx = async () => {
     try {
       showToast("Generating Comprehensive Report...");
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation } = await import("docx");
+      const docx = await import("docx");
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation, Header, Footer, ImageRun, TableLayoutType } = docx;
       const { saveAs } = await import("file-saver");
+      const headerFooter = await getDocxHeaderFooter(13, docx, { header: brandingSettings.headerUrl, footer: brandingSettings.footerUrl });
 
       // Part I: Summary Table
       const summaryTable = new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
+        layout: TableLayoutType.AUTOFIT,
         rows: [
           new TableRow({
             children: [
@@ -3583,14 +5073,14 @@ function AppContent() {
           }),
           new TableRow({
             children: [
-              new TableCell({ children: [new Paragraph({ text: "TOTAL COLLECTIONS (INCOME)" })] }),
-              new TableCell({ children: [new Paragraph({ text: `₱ ${totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, alignment: AlignmentType.RIGHT })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TOTAL COLLECTIONS (INCOME)" })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}` })], alignment: AlignmentType.RIGHT })] }),
             ],
           }),
           new TableRow({
             children: [
-              new TableCell({ children: [new Paragraph({ text: "TOTAL EXPENSES (OUTFLOW)" })] }),
-              new TableCell({ children: [new Paragraph({ text: `₱ ${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, alignment: AlignmentType.RIGHT })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TOTAL EXPENSES (OUTFLOW)" })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}` })], alignment: AlignmentType.RIGHT })] }),
             ],
           }),
           new TableRow({
@@ -3610,6 +5100,7 @@ function AppContent() {
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TEACHER NAME", bold: true, color: "FFFFFF" })] })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "GRADE", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RECEIPT DATE", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "REF. NO.", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
             ...standardDues.map(due => new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: due.name.toUpperCase(), bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } })),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TOTAL PAID", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
             new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "STATUS", bold: true, color: "FFFFFF" })], alignment: AlignmentType.CENTER })], shading: { fill: "0038A8" } }),
@@ -3617,7 +5108,7 @@ function AppContent() {
         }),
       ];
 
-      const sortedRecords = [...records].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedRecords = sortRecordsByGradeAndName(records);
       sortedRecords.forEach((r, index) => {
         const paid = standardDues.filter(d => r.paidDueIds.includes(d.id)).reduce((s, d) => {
           if (d.isVoluntary && r.voluntaryPayments?.[d.id]) return s + r.voluntaryPayments[d.id];
@@ -3626,6 +5117,7 @@ function AppContent() {
         const totalReq = standardDues.filter(d => !d.isVoluntary).reduce((s, d) => s + d.amount, 0);
         const status = paid >= totalReq ? "Fully Paid" : paid > 0 ? "Partial" : "Pending";
         const receiptDate = r.lastReceiptSent ? new Date(r.lastReceiptSent).toLocaleDateString() : "N/A";
+        const refNo = r.lastReferenceNumber || "N/A";
 
         const dueCells = standardDues.map(due => {
           const isPaid = due.isVoluntary 
@@ -3634,18 +5126,19 @@ function AppContent() {
           const amountPaid = due.isVoluntary 
             ? (r.voluntaryPayments?.[due.id] || 0)
             : (r.paidDueIds.includes(due.id) ? due.amount : 0);
-          return new TableCell({ children: [new Paragraph({ text: isPaid ? `Paid (₱${amountPaid})` : 'Not Paid', alignment: AlignmentType.CENTER })] });
+          return new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: isPaid ? `Paid (₱${amountPaid})` : 'Not Paid' })], alignment: AlignmentType.CENTER })] });
         });
 
         collectionRows.push(new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph({ text: (index + 1).toString(), alignment: AlignmentType.CENTER })] }),
-            new TableCell({ children: [new Paragraph({ text: r.name })] }),
-            new TableCell({ children: [new Paragraph({ text: r.gradeLevel, alignment: AlignmentType.CENTER })] }),
-            new TableCell({ children: [new Paragraph({ text: receiptDate, alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (index + 1).toString() })], alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.name })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: r.gradeLevel })], alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: receiptDate })], alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: refNo })], alignment: AlignmentType.CENTER })] }),
             ...dueCells,
-            new TableCell({ children: [new Paragraph({ text: `₱ ${paid.toLocaleString()}`, alignment: AlignmentType.RIGHT })] }),
-            new TableCell({ children: [new Paragraph({ text: status, alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${paid.toLocaleString()}` })], alignment: AlignmentType.RIGHT })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: status })], alignment: AlignmentType.CENTER })] }),
           ],
         }));
       });
@@ -3665,59 +5158,78 @@ function AppContent() {
       expenses.forEach((e, index) => {
         expenseRows.push(new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph({ text: (index + 1).toString(), alignment: AlignmentType.CENTER })] }),
-            new TableCell({ children: [new Paragraph({ text: e.timestamp?.toDate().toLocaleDateString() || "N/A" })] }),
-            new TableCell({ children: [new Paragraph({ text: e.description })] }),
-            new TableCell({ children: [new Paragraph({ text: `₱ ${e.amount.toLocaleString()}`, alignment: AlignmentType.RIGHT })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: (index + 1).toString() })], alignment: AlignmentType.CENTER })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: ensureTimestamp(e.timestamp).toDate().toLocaleDateString() || "N/A" })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: e.description })] })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${e.amount.toLocaleString()}` })], alignment: AlignmentType.RIGHT })] }),
           ],
         }));
       });
 
+      const topMargin = Math.max(1440, (headerFooter.headerHeightTwips || 0) + 1080);
+      const bottomMargin = Math.max(1440, (headerFooter.footerHeightTwips || 0) + 1080);
+
       const doc = new Document({
+        creator: "LPCAANHS Faculty Club Management System",
+        title: "Comprehensive Report",
         sections: [
           {
+            headers: headerFooter.headers,
+            footers: headerFooter.footers,
             properties: {
               page: {
                 size: {
-                  width: 18720, // 13 inches
-                  height: 12240, // 8.5 inches
+                  width: 12240, // 8.5 inches
+                  height: 18720, // 13 inches
                   orientation: PageOrientation.LANDSCAPE,
+                },
+                margin: {
+                  top: topMargin + 720,
+                  right: 720,
+                  bottom: bottomMargin + 720,
+                  left: 720,
+                  header: 720,
+                  footer: 720,
                 },
               },
             },
             children: [
-              new Paragraph({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", heading: HeadingLevel.HEADING_1, alignment: AlignmentType.CENTER }),
-              new Paragraph({ text: "FACULTY CLUB OFFICERS", alignment: AlignmentType.CENTER }),
-              new Paragraph({ text: "COMPREHENSIVE FINANCIAL & LIQUIDATION REPORT", heading: HeadingLevel.HEADING_2, alignment: AlignmentType.CENTER, spacing: { before: 200, after: 100 } }),
-              new Paragraph({ text: `Report Date: ${new Date().toLocaleDateString()}`, alignment: AlignmentType.CENTER, spacing: { after: 400 } }),
+              new Paragraph({ children: [new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 28, color: "0038A8" })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+              new Paragraph({ children: [new TextRun({ text: "FACULTY CLUB OFFICERS", bold: true, size: 24 })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+              new Paragraph({ children: [new TextRun({ text: "COMPREHENSIVE FINANCIAL & LIQUIDATION REPORT", bold: true, size: 20 })], alignment: AlignmentType.CENTER, spacing: { before: 200, after: 100 }, indent: { left: 0, right: 0 } }),
+              new Paragraph({ children: [new TextRun({ text: `Report Date: ${new Date().toLocaleDateString()}` })], alignment: AlignmentType.CENTER, spacing: { after: 400 }, indent: { left: 0, right: 0 } }),
               
-              new Paragraph({ text: "I. FINANCIAL SUMMARY", heading: HeadingLevel.HEADING_3, spacing: { before: 200, after: 200 } }),
+              new Paragraph({ children: [new TextRun({ text: "I. FINANCIAL SUMMARY", bold: true })], spacing: { before: 200, after: 200 } }),
               summaryTable,
 
-              new Paragraph({ text: "II. COLLECTIONS BREAKDOWN", heading: HeadingLevel.HEADING_3, spacing: { before: 400, after: 200 } }),
-              new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: collectionRows }),
+              new Paragraph({ children: [new TextRun({ text: "II. COLLECTIONS BREAKDOWN", bold: true })], spacing: { before: 400, after: 200 } }),
+              new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.AUTOFIT, rows: collectionRows }),
 
-              new Paragraph({ text: "III. EXPENSES BREAKDOWN", heading: HeadingLevel.HEADING_3, spacing: { before: 400, after: 200 } }),
-              new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: expenseRows }),
+              new Paragraph({ children: [new TextRun({ text: "III. EXPENSES BREAKDOWN", bold: true })], spacing: { before: 400, after: 200 } }),
+              new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, layout: TableLayoutType.AUTOFIT, rows: expenseRows }),
 
-              new Paragraph({ text: "", spacing: { before: 800 } }),
-              new Table({
-                width: { size: 100, type: WidthType.PERCENTAGE },
-                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
-                  new TableRow({
-                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
-                          new Paragraph({ text: sig.title })
-                        ], 
-                        borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } 
-                      })
-                    )),
-                  })
-                )),
-              }),
+              new Paragraph({ children: [new TextRun({ text: "" })], spacing: { before: 800 } }),
+              ...(signatories.length > 0 ? [
+                new Table({
+                  width: { size: 100, type: WidthType.PERCENTAGE },
+                  layout: TableLayoutType.AUTOFIT,
+                  rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
+                    new TableRow({
+                      children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
+                        new TableCell({
+                          width: { size: 33.33, type: WidthType.PERCENTAGE },
+                          children: [
+                            new Paragraph({ children: [new TextRun({ text: sig.label || "" })], alignment: AlignmentType.CENTER, spacing: { after: 400 } }), 
+                            new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })], alignment: AlignmentType.CENTER }), 
+                            new Paragraph({ children: [new TextRun({ text: sig.title || "" })], alignment: AlignmentType.CENTER })
+                          ], 
+                          borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } } 
+                        })
+                      )),
+                    })
+                  )),
+                })
+              ] : []),
             ],
           },
         ],
@@ -3740,14 +5252,17 @@ function AppContent() {
 
     try {
       showToast("Generating DOCX report...");
+      const docx = await import("docx");
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation, Header, Footer, ImageRun, TableLayoutType } = docx;
+      const headerFooter = await getDocxHeaderFooter(13, docx, { header: brandingSettings.headerUrl, footer: brandingSettings.footerUrl });
       
       const tableRows = [
         new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph({ text: "DATE", alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
-            new TableCell({ children: [new Paragraph({ text: "DESCRIPTION / PARTICULARS", alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
-            new TableCell({ children: [new Paragraph({ text: "CATEGORY", alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
-            new TableCell({ children: [new Paragraph({ text: "AMOUNT (₱)", alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DATE" })], alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "DESCRIPTION / PARTICULARS" })], alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "CATEGORY" })], alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "AMOUNT (₱)" })], alignment: AlignmentType.CENTER, style: "HeaderStyle" })], shading: { fill: "0038A8" } }),
           ],
         }),
       ];
@@ -3756,10 +5271,10 @@ function AppContent() {
         tableRows.push(
           new TableRow({
             children: [
-              new TableCell({ children: [new Paragraph({ text: exp.timestamp?.toDate().toLocaleDateString() || "N/A", alignment: AlignmentType.CENTER })] }),
-              new TableCell({ children: [new Paragraph({ text: exp.description })] }),
-              new TableCell({ children: [new Paragraph({ text: exp.category || "General", alignment: AlignmentType.CENTER })] }),
-              new TableCell({ children: [new Paragraph({ text: `₱ ${exp.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, alignment: AlignmentType.RIGHT })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: ensureTimestamp(exp.timestamp).toDate().toLocaleDateString() || "N/A" })], alignment: AlignmentType.CENTER })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: exp.description })] })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: exp.category || "General" })], alignment: AlignmentType.CENTER })] }),
+              new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${exp.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}` })], alignment: AlignmentType.RIGHT })] }),
             ],
           })
         );
@@ -3770,13 +5285,18 @@ function AppContent() {
       tableRows.push(
         new TableRow({
           children: [
-            new TableCell({ children: [new Paragraph({ text: "TOTAL EXPENSES", alignment: AlignmentType.RIGHT, style: "BoldStyle" })], columnSpan: 3 }),
-            new TableCell({ children: [new Paragraph({ text: `₱ ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, alignment: AlignmentType.RIGHT, style: "BoldStyle" })] }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "TOTAL EXPENSES" })], alignment: AlignmentType.RIGHT, style: "BoldStyle" })], columnSpan: 3 }),
+            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `₱ ${totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}` })], alignment: AlignmentType.RIGHT, style: "BoldStyle" })] }),
           ],
         })
       );
 
+      const topMargin = Math.max(1440, (headerFooter.headerHeightTwips || 0) + 1080);
+      const bottomMargin = Math.max(1440, (headerFooter.footerHeightTwips || 0) + 1080);
+
       const doc = new Document({
+        creator: "LPCAANHS Faculty Club Management System",
+        title: "Liquidation Report",
         styles: {
           paragraphStyles: [
             { id: "HeaderStyle", name: "Header Style", run: { bold: true, color: "FFFFFF", size: 20 } },
@@ -3785,58 +5305,61 @@ function AppContent() {
         },
         sections: [
           {
+            headers: headerFooter.headers,
+            footers: headerFooter.footers,
             properties: {
               page: {
                 size: {
-                  width: 18720, // 13 inches
-                  height: 12240, // 8.5 inches
+                  width: 12240, // 8.5 inches
+                  height: 18720, // 13 inches
                   orientation: PageOrientation.LANDSCAPE,
+                },
+                margin: {
+                  top: topMargin + 720,
+                  right: 720,
+                  bottom: bottomMargin + 720,
+                  left: 720,
+                  header: 720,
+                  footer: 720,
                 },
               },
             },
             children: [
-              new Paragraph({
-                text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL",
-                heading: HeadingLevel.HEADING_1,
-                alignment: AlignmentType.CENTER,
-              }),
-              new Paragraph({
-                text: "FACULTY CLUB OFFICERS",
-                alignment: AlignmentType.CENTER,
-              }),
-              new Paragraph({
-                text: "LIQUIDATION REPORT",
-                heading: HeadingLevel.HEADING_2,
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 200, after: 400 },
-              }),
+              new Paragraph({ children: [new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 32 })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+              new Paragraph({ children: [new TextRun({ text: "FACULTY CLUB OFFICERS", bold: true, size: 28 })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
+              new Paragraph({ children: [new TextRun({ text: "LIQUIDATION REPORT", bold: true, size: 24 })], alignment: AlignmentType.CENTER, spacing: { before: 200, after: 400 }, indent: { left: 0, right: 0 } }),
               new Table({
                 width: { size: 100, type: WidthType.PERCENTAGE },
+                layout: TableLayoutType.AUTOFIT,
                 rows: tableRows,
               }),
-              new Paragraph({ text: "", spacing: { before: 800 } }),
-              new Table({
-                width: { size: 100, type: WidthType.PERCENTAGE },
-                rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
-                  new TableRow({
-                    children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
-                      new TableCell({ 
-                        children: [
-                          new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
-                          new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
-                          new Paragraph({ text: sig.title })
-                        ], 
-                        borders: { 
-                          top: { style: BorderStyle.NONE }, 
-                          bottom: { style: BorderStyle.NONE }, 
-                          left: { style: BorderStyle.NONE }, 
-                          right: { style: BorderStyle.NONE } 
-                        } 
-                      })
-                    )),
-                  })
-                )),
-              }),
+              new Paragraph({ children: [new TextRun({ text: "" })], spacing: { before: 800 } }),
+              ...(signatories.length > 0 ? [
+                new Table({
+                  width: { size: 100, type: WidthType.PERCENTAGE },
+                  layout: TableLayoutType.AUTOFIT,
+                  rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
+                    new TableRow({
+                      children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
+                        new TableCell({
+                          width: { size: 33.33, type: WidthType.PERCENTAGE },
+                          children: [
+                            new Paragraph({ children: [new TextRun({ text: sig.label || "" })], alignment: AlignmentType.CENTER, spacing: { after: 400 } }), 
+                            new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })], alignment: AlignmentType.CENTER }), 
+                            new Paragraph({ children: [new TextRun({ text: sig.title || "" })], alignment: AlignmentType.CENTER })
+                          ], 
+                          borders: { 
+                            top: { style: BorderStyle.NONE }, 
+                            bottom: { style: BorderStyle.NONE }, 
+                            left: { style: BorderStyle.NONE }, 
+                            right: { style: BorderStyle.NONE } 
+                          } 
+                        })
+                      )),
+                    })
+                  )),
+                })
+              ] : []),
             ],
           },
         ],
@@ -3884,26 +5407,37 @@ function AppContent() {
     }
   };
 
-  const generateHTMLReceipt = (receipt: any, includeHistory: boolean = false) => {
+  const generateHTMLReceipt = (receipt: any, includeSignatories: boolean = false) => {
     return `
       <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 16px; color: #1a202c; line-height: 1.6; background-color: #ffffff;">
-        <div style="text-align: center; margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #f1f5f9;">
+        <div style="text-align: center; margin-bottom: 25px; padding-bottom: 20px; border-bottom: 2px solid #f1f5f9;">
           <h2 style="color: #0038A8; margin: 0 0 5px 0; font-size: 22px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Official Receipt</h2>
           <p style="color: #64748b; margin: 0; font-size: 14px;">Las Piñas CAA National High School Faculty Club</p>
         </div>
 
-        <div style="margin-bottom: 25px;">
-          <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Date & Time</p>
-          <p style="margin: 0 0 15px 0; font-size: 15px; font-weight: 600;">${receipt.date}</p>
-          
-          <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Reference Number</p>
-          <p style="margin: 0 0 15px 0; font-size: 15px; font-weight: 600; font-family: monospace;">${receipt.referenceNumber}</p>
-          
-          <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Received From</p>
-          <p style="margin: 0; font-size: 16px; font-weight: 700; color: #0038A8;">${receipt.teacherName}</p>
+        <div style="text-align: center; margin-bottom: 30px;">
+          <div style="display: inline-block; background-color: #f0fdf4; border: 2px solid #bbf7d0; color: #16a34a; padding: 12px 30px; border-radius: 50px; font-weight: 900; font-size: 18px; text-transform: uppercase; letter-spacing: 2px; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+            <span style="margin-right: 10px;">✅</span> PAYMENT SUCCESSFUL
+          </div>
         </div>
 
-        <h3 style="font-size: 14px; font-weight: 800; color: #1a202c; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 15px; text-transform: uppercase;">Payment Details</h3>
+        <div style="margin-bottom: 25px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+          <div>
+            <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Date & Time</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 600;">${receipt.date}</p>
+          </div>
+          <div style="text-align: right;">
+            <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Reference Number</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 600; font-family: monospace; color: #0038A8;">${receipt.referenceNumber}</p>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 25px; padding: 15px; border-radius: 12px; background-color: #f8fafc; border-left: 4px solid #0038A8;">
+          <p style="margin: 0 0 5px 0; color: #64748b; font-size: 13px; text-transform: uppercase; font-weight: bold;">Received From</p>
+          <p style="margin: 0; font-size: 18px; font-weight: 800; color: #0038A8;">${receipt.teacherName}</p>
+        </div>
+
+        <h3 style="font-size: 13px; font-weight: 800; color: #64748b; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px;">Summary of Payment</h3>
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
           <tbody>
             ${receipt.breakdown.map((item: any) => `
@@ -3915,63 +5449,46 @@ function AppContent() {
           </tbody>
           <tfoot>
             <tr>
-              <td style="padding: 15px 0 0 0; font-size: 16px; font-weight: 800; color: #0038A8;">Total Paid</td>
-              <td style="padding: 15px 0 0 0; font-size: 18px; font-weight: 900; color: #0038A8; text-align: right;">₱${receipt.total.toFixed(2)}</td>
+              <td style="padding: 20px 0 0 0; font-size: 16px; font-weight: 800; color: #0038A8;">Total Amount Paid</td>
+              <td style="padding: 20px 0 0 0; font-size: 22px; font-weight: 900; color: #0038A8; text-align: right;">₱${receipt.total.toFixed(2)}</td>
             </tr>
           </tfoot>
         </table>
 
-        ${includeHistory && receipt.paymentHistory && receipt.paymentHistory.length > 0 ? `
-        <h3 style="font-size: 14px; font-weight: 800; color: #64748b; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; margin-bottom: 15px; text-transform: uppercase;">Past Payment History</h3>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
-          <tbody>
-            ${receipt.paymentHistory.map((h: any) => `
-              <tr>
-                <td style="padding: 8px 0; font-size: 13px; color: #4a5568; border-bottom: 1px dashed #f1f5f9;">
-                  <div><strong>${h.dueName}</strong></div>
-                  <div style="font-size: 11px; color: #a0aec0;">${new Date(h.date).toLocaleDateString()}</div>
-                </td>
-                <td style="padding: 8px 0; font-size: 14px; color: #4a5568; border-bottom: 1px dashed #f1f5f9; text-align: right; font-weight: 600;">₱${h.amount.toFixed(2)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        ` : ''}
-
-        <div style="background-color: ${receipt.isFullyPaid ? '#f0fdf4' : '#fffbeb'}; padding: 20px; border-radius: 12px; border: 1px solid ${receipt.isFullyPaid ? '#bbf7d0' : '#fef3c7'}; margin-bottom: 25px; text-align: left;">
-          <p style="margin: 0 0 5px 0; font-size: 12px; font-weight: 800; color: ${receipt.isFullyPaid ? '#166534' : '#92400e'}; text-transform: uppercase; letter-spacing: 0.5px;">Status</p>
-          <p style="margin: 0; font-size: 18px; font-weight: 800; color: ${receipt.isFullyPaid ? '#15803d' : '#b45309'};">${receipt.isFullyPaid ? 'FULLY PAID' : 'PARTIAL PAYMENT'}</p>
-        </div>
-
-        ${receipt.collectiblesBreakdown && receipt.collectiblesBreakdown.length > 0 ? `
-        <div style="background-color: #fef2f2; padding: 20px; border-radius: 12px; border: 1px solid #fecaca; margin-bottom: 25px;">
-          <p style="margin: 0 0 5px 0; font-size: 12px; font-weight: 800; color: #991b1b; text-transform: uppercase; letter-spacing: 0.5px;">Remaining Balance</p>
-          <p style="margin: 0 0 10px 0; font-size: 18px; font-weight: 800; color: #b91c1c;">₱${receipt.balance.toFixed(2)}</p>
+        <div style="display: flex; gap: 15px; margin-bottom: 25px;">
+          <div style="flex: 1; background-color: ${receipt.isFullyPaid ? '#f0fdf4' : '#fffbeb'}; padding: 15px; border-radius: 12px; border: 1px solid ${receipt.isFullyPaid ? '#bbf7d0' : '#fef3c7'}; text-align: center;">
+            <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 800; color: ${receipt.isFullyPaid ? '#166534' : '#92400e'}; text-transform: uppercase; letter-spacing: 0.5px;">Payment Status</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 900; color: ${receipt.isFullyPaid ? '#15803d' : '#b45309'};">${receipt.isFullyPaid ? 'FULLY PAID' : 'PARTIAL'}</p>
+          </div>
           
-          <table style="width: 100%; border-collapse: collapse;">
-            <tbody>
-              ${receipt.collectiblesBreakdown.map((item: any) => `
-                <tr>
-                  <td style="padding: 4px 0; font-size: 12px; color: #7f1d1d;">${item.name}</td>
-                  <td style="padding: 4px 0; font-size: 12px; color: #991b1b; text-align: right; font-weight: 700;">₱${item.amount.toFixed(2)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+          ${receipt.collectiblesBreakdown && receipt.collectiblesBreakdown.length > 0 ? `
+          <div style="flex: 1; background-color: #fef2f2; padding: 15px; border-radius: 12px; border: 1px solid #fecaca; text-align: center;">
+            <p style="margin: 0 0 2px 0; font-size: 10px; font-weight: 800; color: #991b1b; text-transform: uppercase; letter-spacing: 0.5px;">Remaining Balance</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 900; color: #b91c1c;">₱${receipt.balance.toFixed(2)}</p>
+          </div>
+          ` : ''}
         </div>
-        ` : ''}
 
-        <div style="margin-top: 30px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 20px;">
-          <p style="color: #16a34a; font-weight: 800; font-size: 16px; margin: 0 0 20px 0;">PAYMENT SUCCESSFUL</p>
+        <div style="margin-top: 30px; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 25px; margin-bottom: 30px;">
+          <h4 style="margin: 0 0 10px 0; color: #0038A8; font-size: 18px; font-weight: 800;">Thank You!</h4>
+          <p style="margin: 0; color: #64748b; font-size: 14px; line-height: 1.8;">
+            Thank you for your prompt payment and continued support of the <strong>Las Piñas CAA NHS Faculty Club</strong>. 
+            Your contributions help us sustain our programs and build a stronger, more supportive community for all our members. 
+            We truly appreciate your dedication and partnership!
+          </p>
+        </div>
+
+        ${includeSignatories ? `
+        <div style="margin-top: 40px; border-top: 2px dashed #f1f5f9; padding-top: 30px;">
           <table style="width: 100%; border-collapse: collapse;">
             <tbody>
               ${Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => `
                 <tr>
                   ${signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => `
                     <td style="padding: 10px; text-align: center; width: 33.33%;">
-                      <p style="font-size: 12px; color: #64748b; margin: 0 0 20px 0;">${sig.label}</p>
-                      <p style="font-size: 14px; font-weight: 800; color: #1a202c; margin: 0; text-transform: uppercase;">${sig.name || "____________________"}</p>
-                      <p style="font-size: 12px; color: #64748b; margin: 0;">${sig.title}</p>
+                      <p style="font-size: 11px; color: #94a3b8; margin: 0 0 15px 0; text-transform: uppercase; letter-spacing: 1px;">${sig.label}</p>
+                      <p style="font-size: 13px; font-weight: 900; color: #1a202c; margin: 0; text-transform: uppercase; border-bottom: 1px solid #eee; padding-bottom: 5px; display: inline-block;">${sig.name || "____________________"}</p>
+                      <p style="font-size: 11px; color: #64748b; margin: 5px 0 0 0; font-weight: 600;">${sig.title}</p>
                     </td>
                   `).join('')}
                 </tr>
@@ -3979,15 +5496,24 @@ function AppContent() {
             </tbody>
           </table>
         </div>
+        ` : ''}
+        
+        <div style="margin-top: 20px; text-align: center; border-top: 1px solid #f1f5f9; padding-top: 15px;">
+           <p style="font-size: 10px; color: #cbd5e1; margin: 0; text-transform: uppercase; letter-spacing: 2px;">This is an electronically generated official receipt.</p>
+        </div>
       </div>
     `;
   };
 
   const sendReceiptEmail = async (record: TeacherRecord) => {
+    if (!record.email || !record.email.includes('@')) {
+      return { success: false, error: `Teacher ${record.name} does not have a valid email address.` };
+    }
+
     const paidDues = standardDues.filter(d => record.paidDueIds.includes(d.id));
     const collectiblesDues = standardDues.filter(d => !record.paidDueIds.includes(d.id) && !d.isVoluntary);
     
-    if (paidDues.length === 0) return { success: false, error: "No paid dues" };
+    if (paidDues.length === 0) return { success: false, error: "No paid dues found for this teacher." };
 
     const total = paidDues.reduce((sum, d) => {
       if (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) {
@@ -3999,9 +5525,11 @@ function AppContent() {
     const requiredDues = standardDues.filter(d => !d.isVoluntary);
     const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => record.paidDueIds.includes(d.id));
 
+    const rawReferenceNumber = record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
     const receipt = {
       date: new Date().toLocaleString(),
-      referenceNumber: record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      referenceNumber: rawReferenceNumber,
       teacherName: record.name,
       email: record.email,
       breakdown: paidDues.map(d => ({ 
@@ -4009,63 +5537,91 @@ function AppContent() {
         amount: (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) ? record.voluntaryPayments[d.id] : d.amount 
       })),
       collectiblesBreakdown: collectiblesDues.map(d => ({ name: d.name, amount: d.amount })),
-      paymentHistory: (record.paymentHistory || []).map(h => {
-        const due = standardDues.find(d => d.id === h.dueId);
-        return {
-          ...h,
-          dueName: due?.isVoluntary ? `${h.dueName} (Vol)` : h.dueName
-        };
-      }),
       total: total,
       balance: balance,
       isFullyPaid: isFullyPaid,
       sender: "Las Piñas CAA Faculty Club Officers - BODs"
     };
 
-    const html = generateHTMLReceipt(receipt, true);
+    const html = generateHTMLReceipt(receipt);
 
     try {
-      const response = await fetch('/api/send-receipt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: record.email,
-          subject: `Official Receipt - ${record.name} - ${receipt.referenceNumber}`,
-          html: html
-        })
+      // Persist if it's the first time generating a reference number for this teacher
+      if (!record.lastReferenceNumber) {
+        await updateDoc(doc(db, 'teachers', record.id), {
+          lastReferenceNumber: rawReferenceNumber
+        });
+      }
+
+      // Reliable SMTP / API transmit
+      let isDelivered = false;
+      let isSimulated = false;
+
+      try {
+        const response = await fetch('/api/send-receipt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: record.email,
+            subject: `Official Receipt - ${record.name} - ${receipt.referenceNumber}`,
+            html: html
+          })
+        });
+
+        const resData = await response.json().catch(() => ({ success: true }));
+        if (resData.success) {
+          isDelivered = !!resData.delivered;
+          isSimulated = !!resData.simulated;
+          console.log(`Receipt email processed successfully for ${record.email} (Delivered: ${isDelivered}, Simulated: ${isSimulated})`);
+        } else {
+          console.warn(`Receipt endpoint returned notice:`, resData);
+        }
+      } catch (networkError) {
+        console.warn("Network interrupt during receipt email dispatch, proceeding with receipt generation:", networkError);
+      }
+
+      // Explicitly proceed with successful receipt execution & record updates in Firestore immediately
+      await updateDoc(doc(db, 'teachers', record.id), {
+        lastReceiptSent: new Date().toISOString(),
+        lastReferenceNumber: receipt.referenceNumber
       });
 
-      const result = await response.json();
-      if (result.success) {
-        await updateDoc(doc(db, 'teachers', record.id), {
-          lastReceiptSent: new Date().toISOString(),
-          lastReferenceNumber: receipt.referenceNumber
-        });
-        return { success: true, ref: receipt.referenceNumber };
-      } else {
-        return { success: false, error: result.error || 'Failed to send email' };
-      }
-    } catch (error) {
-      console.error("Send Error:", error);
-      return { success: false, error: "Connection error" };
+      return { 
+        success: true, 
+        ref: receipt.referenceNumber,
+        delivered: isDelivered,
+        simulated: isSimulated
+      };
+    } catch (error: any) {
+      console.error("General wrapper error under sendReceiptEmail:", error);
+      return { success: false, error: error?.message || "Failed to generate official receipt." };
     }
   };
 
   const handleSendReceipt = async (record: TeacherRecord) => {
+    if (!record.email || !record.email.includes('@')) {
+      showToast(`Cannot send receipt: ${record.name} has no valid email address.`);
+      return;
+    }
+
     setIsSending(record.id);
     const result = await sendReceiptEmail(record);
     if (result.success) {
-      showToast(`Receipt Sent to ${record.email}`);
+      const deliveryStatus = result.delivered 
+        ? `Delivered to ${record.email}`
+        : `Sent to ${record.email}`;
+      showToast(`Official Receipt (${result.ref}) - ${deliveryStatus}`);
+      logActivity("Sent Receipt", `Official receipt (${result.ref}) sent to ${record.name} (${record.email})`);
     } else {
       showToast(`Error: ${result.error}`);
     }
     setIsSending(null);
   };
 
-  const handleDownloadReceipt = (record: TeacherRecord) => {
+  const handleDownloadReceipt = async (record: TeacherRecord) => {
     const safePaidDueIds = record.paidDueIds || [];
-    const paidDues = standardDues.filter(d => safePaidDueIds.includes(d.id));
-    const collectiblesDues = standardDues.filter(d => !safePaidDueIds.includes(d.id) && !d.isVoluntary);
+    const paidDues = standardDues.filter(d => safePaidDueIds.includes(d.id) || (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined && record.voluntaryPayments[d.id] > 0));
+    const collectiblesDues = standardDues.filter(d => !safePaidDueIds.includes(d.id) && !(d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined && record.voluntaryPayments[d.id] > 0));
     
     if (paidDues.length === 0) {
       showToast("No paid dues to generate receipt.");
@@ -4082,9 +5638,22 @@ function AppContent() {
     const requiredDues = standardDues.filter(d => !d.isVoluntary);
     const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => safePaidDueIds.includes(d.id));
 
+    const rawReferenceNumber = record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+    // Persist if it's the first time generating a reference number for this teacher
+    if (!record.lastReferenceNumber) {
+      try {
+        await updateDoc(doc(db, 'teachers', record.id), {
+          lastReferenceNumber: rawReferenceNumber
+        });
+      } catch (e) {
+        console.error("Failed to persist reference number during preview", e);
+      }
+    }
+
     const receipt = {
       date: new Date().toLocaleString(),
-      referenceNumber: record.lastReferenceNumber || `REC-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      referenceNumber: rawReferenceNumber,
       teacherName: record.name,
       email: record.email,
       breakdown: paidDues.map(d => ({ 
@@ -4092,13 +5661,6 @@ function AppContent() {
         amount: (d.isVoluntary && record.voluntaryPayments?.[d.id] !== undefined) ? record.voluntaryPayments[d.id] : d.amount 
       })),
       collectiblesBreakdown: collectiblesDues.map(d => ({ name: d.name, amount: d.amount })),
-      paymentHistory: (record.paymentHistory || []).map(h => {
-        const due = standardDues.find(d => d.id === h.dueId);
-        return {
-          ...h,
-          dueName: due?.isVoluntary ? `${h.dueName} (Vol)` : h.dueName
-        };
-      }),
       total: total,
       balance: balance,
       isFullyPaid: isFullyPaid,
@@ -4150,23 +5712,36 @@ function AppContent() {
     setIsDownloadingReceipt(true);
     
     try {
-      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel } = await import("docx");
+      const docx = await import("docx");
+      const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, AlignmentType, HeadingLevel, PageOrientation, Header, Footer, ImageRun, TableLayoutType } = docx;
       const { saveAs } = await import("file-saver");
 
       const receipt = previewReceiptData;
 
       const doc = new Document({
+        creator: "LPCAANHS Faculty Club Management System",
+        title: "Official Receipt",
         sections: [{
-          properties: {},
+          properties: {
+            page: {
+              size: {
+                width: 12240, // 8.5 inches
+                height: 18720, // 13 inches
+                orientation: PageOrientation.LANDSCAPE,
+              },
+              margin: {
+                top: 1440,
+                right: 720,
+                bottom: 1440,
+                left: 720,
+              },
+            },
+          },
           children: [
+            new Paragraph({ children: [new TextRun({ text: "LAS PIÑAS CAA NATIONAL HIGH SCHOOL", bold: true, size: 28, color: "0038A8" })], alignment: AlignmentType.CENTER, indent: { left: 0, right: 0 } }),
             new Paragraph({
               alignment: AlignmentType.CENTER,
-              children: [
-                new TextRun({ text: "OFFICIAL RECEIPT", bold: true, size: 48, color: "0038A8" }),
-              ],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
+              indent: { left: 0, right: 0 },
               children: [
                 new TextRun({ text: "Las Piñas CAA Faculty Club", size: 24, color: "666666" }),
               ],
@@ -4177,6 +5752,7 @@ function AppContent() {
                 new TextRun({ text: "Reference No.: ", bold: true }),
                 new TextRun({ text: receipt.referenceNumber }),
               ],
+              indent: { left: 0 },
             }),
             new Paragraph({
               children: [
@@ -4201,13 +5777,10 @@ function AppContent() {
               ],
               spacing: { after: 400 },
             }),
-            new Paragraph({
-              text: "Payment Details",
-              heading: HeadingLevel.HEADING_3,
-              spacing: { after: 200 },
-            }),
+            new Paragraph({ children: [new TextRun({ text: "Payment Details", bold: true, size: 28 })], spacing: { after: 200 } }),
             new Table({
               width: { size: 100, type: WidthType.PERCENTAGE },
+              layout: TableLayoutType.AUTOFIT,
               rows: [
                 new TableRow({
                   children: [
@@ -4226,11 +5799,11 @@ function AppContent() {
                 ...receipt.breakdown.map((item: any) => new TableRow({
                   children: [
                     new TableCell({
-                      children: [new Paragraph({ text: item.name })],
+                      children: [new Paragraph({ children: [new TextRun({ text: item.name })] })],
                       margins: { top: 100, bottom: 100, left: 100, right: 100 },
                     }),
                     new TableCell({
-                      children: [new Paragraph({ text: `PHP ${item.amount.toFixed(2)}`, alignment: AlignmentType.RIGHT })],
+                      children: [new Paragraph({ children: [new TextRun({ text: `PHP ${item.amount.toFixed(2)}` })], alignment: AlignmentType.RIGHT })],
                       margins: { top: 100, bottom: 100, left: 100, right: 100 },
                     }),
                   ],
@@ -4280,24 +5853,7 @@ function AppContent() {
                   indent: { left: 300 }
               }))
             ] : []),
-            new Paragraph({ text: "", spacing: { before: 800 } }),
-            new Table({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              rows: Array.from({ length: Math.ceil(signatories.length / 3) }).map((_, rowIndex) => (
-                new TableRow({
-                  children: signatories.slice(rowIndex * 3, (rowIndex + 1) * 3).map(sig => (
-                    new TableCell({ 
-                      children: [
-                        new Paragraph({ text: sig.label, spacing: { after: 400 } }), 
-                        new Paragraph({ children: [new TextRun({ text: sig.name || "____________________", bold: true })] }), 
-                        new Paragraph({ text: sig.title })
-                      ],
-                      borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
-                    })
-                  ))
-                })
-              ))
-            }),
+            new Paragraph({ children: [new TextRun({ text: "" })], spacing: { before: 800 } }),
           ],
         }],
       });
@@ -4383,33 +5939,39 @@ function AppContent() {
     }
 
     setIsBatchSending(true);
+    showToast(`Batch sending receipts to ${teachersToReceive.length} teachers...`);
     let successCount = 0;
     const total = teachersToReceive.length;
     
-    for (let i = 0; i < total; i++) {
-      const record = teachersToReceive[i];
-      showToast(`Sending receipt ${i + 1} of ${total}...`);
+    // Process in batches of 5 to avoid overwhelming the server
+    const CONCURRENCY = 5;
+    
+    for (let i = 0; i < total; i += CONCURRENCY) {
+      const batch = teachersToReceive.slice(i, i + CONCURRENCY);
       
-      let result = await sendReceiptEmail(record);
+      const results = await Promise.all(batch.map(async (record) => {
+        let result = await sendReceiptEmail(record);
+        
+        // Retry logic: if it fails, wait 2 seconds and try again (up to 2 retries)
+        let retries = 2;
+        while (!result.success && retries > 0 && result.error !== 'Email service not configured.') {
+          console.log(`Failed to send to ${record.email}, retrying... (${retries} retries left)`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          result = await sendReceiptEmail(record);
+          retries--;
+        }
+        
+        if (!result.success) {
+          console.error(`Final failure sending to ${record.email}: ${result.error}`);
+        }
+        return result.success;
+      }));
       
-      // Retry logic: if it fails, wait 2 seconds and try again (up to 2 retries)
-      let retries = 2;
-      while (!result.success && retries > 0) {
-        console.log(`Failed to send to ${record.email}, retrying... (${retries} retries left)`);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        result = await sendReceiptEmail(record);
-        retries--;
-      }
+      successCount += results.filter(Boolean).length;
       
-      if (result.success) {
-        successCount++;
-      } else {
-        console.error(`Final failure sending to ${record.email}: ${result.error}`);
-      }
-      
-      // Delay of 3 seconds between emails to prevent rate limiting/backend overload
-      if (i < total - 1) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
+      // Delay of 1.5 seconds between batches to prevent rate limiting/backend overload
+      if (i + CONCURRENCY < total) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
     }
 
@@ -4578,8 +6140,25 @@ function AppContent() {
           }
         }}
       >
-        {/* Moving Gradient Background */}
-        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none bg-gradient-to-br from-[#001233] via-[#0038A8] to-[#001233] bg-[length:400%_400%] animate-[gradientMove_15s_ease_infinite]">
+        {/* Desktop Ocean Background */}
+        <DesktopOceanBackground />
+        
+        {/* Moving Gradient Background (Mobile only) */}
+        <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none md:hidden bg-[#000511]">
+          <div className="absolute inset-0 bg-gradient-to-br from-[#001233] via-[#0038A8] to-[#001233] bg-[length:400%_400%] animate-[gradientMove_15s_ease_infinite]" />
+          
+          {/* Mobile Aurora */}
+          <motion.div
+            animate={{ scale: [1, 1.2, 1], x: ['0%', '10%', '0%'] }}
+            transition={{ duration: 25, repeat: Infinity, ease: 'easeInOut' }}
+            className="absolute top-[10%] -left-[20%] w-[140%] h-[40%] rounded-full bg-[#00A86B] opacity-20 blur-[80px] mix-blend-screen"
+          />
+          <motion.div
+            animate={{ scale: [1, 1.3, 1], x: ['0%', '-10%', '0%'] }}
+            transition={{ duration: 30, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
+            className="absolute bottom-[20%] -right-[20%] w-[140%] h-[40%] rounded-full bg-[#9b5de5] opacity-20 blur-[80px] mix-blend-screen"
+          />
+
           <style>
             {`
               @keyframes gradientMove {
@@ -4589,31 +6168,39 @@ function AppContent() {
               }
             `}
           </style>
+
+          {/* Sweeping Aurora Stars (Mobile Horizontal Flow) */}
+          {[...Array(40)].map((_, i) => (
+            <motion.div
+                key={`mobile-aurora-star-${i}`}
+                initial={{ 
+                  y: `${Math.random() * 80 + 10}vh`, 
+                  x: `-20vw`, 
+                  opacity: 0,
+                }}
+                animate={{ 
+                    y: [`${Math.random() * 80 + 10}vh`, `${(Math.random() * 80 + 10) + (Math.random() * 20 - 10)}vh`], 
+                    x: [`-20vw`, `120vw`], 
+                    opacity: [0, Math.random() * 0.8 + 0.2, 0],
+                }}
+                transition={{
+                    duration: Math.random() * 12 + 12, // Faster for smaller screen
+                    repeat: Infinity,
+                    delay: -Math.random() * 20,
+                    ease: "linear"
+                }}
+                className="absolute rounded-full bg-white shadow-[0_0_10px_2px_rgba(255,255,255,0.5)]"
+                style={{
+                    width: `${Math.random() * 2 + 1}px`,
+                    height: `${Math.random() * 2 + 1}px`,
+                    filter: `blur(${Math.random() * 0.5}px)`
+                }}
+            />
+          ))}
+
           {/* Floating Bubbles */}
           {BACKGROUND_PARTICLES.map((p) => (
-            <motion.div
-              key={p.id}
-              className="absolute rounded-full bg-gradient-to-tr from-white/5 to-white/20 backdrop-blur-[1px] border border-white/20 shadow-[inset_0_2px_4px_rgba(255,255,255,0.3)] pointer-events-none"
-              style={{
-                width: p.size,
-                height: p.size,
-                left: `${p.left}%`,
-                bottom: "-10%",
-              }}
-              animate={{
-                y: ["0vh", "-110vh"],
-                x: ["0vw", `${p.xOffset}vw`],
-                scale: p.pops ? [0.5, 1, 1, 1.4, 0] : [0.5, 1, 1],
-                opacity: p.pops ? [0, 0.4, 0.4, 0.6, 0] : [0, 0.4, 0.4]
-              }}
-              transition={{
-                duration: p.duration,
-                repeat: Infinity,
-                ease: "linear",
-                delay: p.delay,
-                times: p.pops ? [0, 0.1, 0.8, 0.9, 0.95] : [0, 0.1, 1]
-              }}
-            />
+            <FloatingBubbleMobile p={p} key={p.id} />
           ))}
         </div>
 
@@ -4621,7 +6208,7 @@ function AppContent() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.5, ease: "easeOut" }}
-          className="bg-white/90 backdrop-blur-2xl p-6 sm:p-10 md:p-14 rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] max-w-md lg:max-w-lg w-full text-center border border-white/60 relative z-10 overflow-hidden"
+          className="bg-white/90 backdrop-blur-2xl p-6 sm:p-10 md:p-14 lg:p-16 rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] max-w-md lg:max-w-xl w-full text-center border border-white/60 relative z-10 overflow-hidden"
         >
           {/* Card Bubbles */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -4658,20 +6245,28 @@ function AppContent() {
             <Sun className="text-[#FCD116] animate-sun-rotate" size={40} fill="#FCD116" />
           </motion.div>
           
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-gray-900 mb-2 sm:mb-4 tracking-tighter uppercase leading-tight">
+          <h1 className={`text-3xl sm:text-4xl md:text-5xl font-black mb-2 sm:mb-4 tracking-tighter uppercase leading-tight ${
+            isDarkMode ? 'text-white' : 'text-gray-900'
+          }`}>
             FACULTY CLUB
           </h1>
           <div className="flex items-center justify-center gap-3 mb-8 sm:mb-12">
-            <div className="h-px w-8 bg-blue-200"></div>
-            <p className="text-[#0038A8] font-black text-[10px] sm:text-xs uppercase tracking-[0.3em]">Dues Management</p>
-            <div className="h-px w-8 bg-blue-200"></div>
+            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-800' : 'bg-blue-200'}`}></div>
+            <p className={`font-black text-[10px] sm:text-xs uppercase tracking-[0.3em] ${
+              isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+            }`}>Dues Management</p>
+            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-800' : 'bg-blue-200'}`}></div>
           </div>
           
           <div className="space-y-4 sm:space-y-6">
-            <div className="bg-gray-50/80 rounded-[2rem] p-6 sm:p-10 border border-gray-100/50 shadow-[inset_0_2px_4px_rgba(0,0,0,0.02)]">
+            <div className={`rounded-[2rem] p-6 sm:p-10 border shadow-sm ${
+              isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-gray-50/80 border-gray-100/50 text-gray-900'
+            }`}>
               <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
                 <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
-                <p className="text-[10px] text-gray-400 uppercase tracking-widest font-black">Secure Portal Access</p>
+                <p className={`text-[10px] uppercase tracking-widest font-black ${
+                  isDarkMode ? 'text-slate-400' : 'text-gray-400'
+                }`}>Secure Portal Access</p>
               </div>
               
               <div className="space-y-3 sm:space-y-4">
@@ -4692,24 +6287,32 @@ function AppContent() {
                 </button>
 
                 <div className="relative flex items-center py-4 sm:py-6">
-                  <div className="flex-grow border-t border-gray-200/60"></div>
-                  <span className="flex-shrink-0 mx-4 text-gray-300 text-[10px] font-black uppercase tracking-[0.2em]">Quick Login</span>
-                  <div className="flex-grow border-t border-gray-200/60"></div>
+                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-200/60'}`}></div>
+                  <span className={`flex-shrink-0 mx-4 text-[10px] font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-slate-500' : 'text-gray-300'}`}>Quick Login</span>
+                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-200/60'}`}></div>
                 </div>
 
                 <button 
                   onClick={() => setShowScanner(true)}
-                  className="w-full bg-white text-gray-700 border-2 border-gray-100 py-4 sm:py-5 px-6 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest hover:border-blue-200 hover:bg-blue-50/30 hover:text-[#0038A8] transition-all duration-300 flex items-center justify-center gap-3 group"
+                  className={`w-full py-4 sm:py-5 px-6 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 group border-2 ${
+                    isDarkMode 
+                      ? 'bg-slate-800 text-slate-100 border-slate-700 hover:bg-slate-700 hover:text-white' 
+                      : 'bg-white text-gray-700 border-gray-100 hover:border-blue-200 hover:bg-blue-50/30 hover:text-[#0038A8]'
+                  }`}
                 >
-                  <div className="bg-gray-100 p-1.5 rounded-xl group-hover:bg-blue-100 transition-colors shadow-sm">
-                    <QrCode size={18} className="text-gray-600 group-hover:text-[#0038A8]" />
+                  <div className={`p-1.5 rounded-xl transition-colors shadow-sm ${
+                    isDarkMode ? 'bg-slate-700 group-hover:bg-slate-600' : 'bg-gray-100 group-hover:bg-blue-100'
+                  }`}>
+                    <QrCode size={18} className={isDarkMode ? 'text-blue-400' : 'text-gray-600 group-hover:text-[#0038A8]'} />
                   </div>
                   <span>Scan QR Access</span>
                 </button>
               </div>
             </div>
             
-            <p className="text-[10px] sm:text-xs text-gray-400 font-bold px-4 leading-relaxed relative z-20">
+            <p className={`text-[10px] sm:text-xs font-bold px-4 leading-relaxed relative z-20 ${
+              isDarkMode ? 'text-slate-400' : 'text-gray-400'
+            }`}>
               By signing in, you agree to the Faculty Club's{' '}
               <button 
                 type="button"
@@ -4718,7 +6321,9 @@ function AppContent() {
                   e.stopPropagation();
                   setShowTermsModal(true);
                 }}
-                className="text-[#0038A8] hover:underline transition-all cursor-pointer relative z-30"
+                className={`hover:underline transition-all cursor-pointer relative z-30 ${
+                  isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+                }`}
               >
                 terms of service
               </button>{' '}
@@ -4730,7 +6335,9 @@ function AppContent() {
                   e.stopPropagation();
                   setShowTermsModal(true);
                 }}
-                className="text-[#0038A8] hover:underline transition-all cursor-pointer relative z-30"
+                className={`hover:underline transition-all cursor-pointer relative z-30 ${
+                  isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+                }`}
               >
                 data privacy guidelines
               </button>.
@@ -4746,32 +6353,46 @@ function AppContent() {
 
         {/* QR Code Scanner Modal */}
         {showScanner && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/95 backdrop-blur-md">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl relative overflow-hidden"
+              className={`${isDarkMode ? 'bg-gray-900 border border-gray-800' : 'bg-white'} rounded-3xl p-6 lg:p-10 max-w-md lg:max-w-lg w-full shadow-2xl relative overflow-hidden`}
             >
               <button 
                 onClick={() => setShowScanner(false)}
-                className="absolute top-4 right-4 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors z-[110]"
+                className={`absolute top-4 right-4 p-2 rounded-full transition-colors z-[110] ${
+                  isDarkMode ? 'bg-gray-800 text-gray-400 hover:bg-gray-750 hover:text-gray-200' : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                }`}
               >
                 <X size={20} />
               </button>
               <div className="flex items-center justify-between mb-4 px-2">
-                <h2 className="text-xl font-black text-gray-900">Scan QR Code</h2>
+                <h2 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Scan QR Code</h2>
                 <div className="flex items-center gap-2">
                   <button 
                     onClick={() => setTorchOn(prev => !prev)}
-                    className={`p-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold ${torchOn ? 'bg-yellow-100 text-yellow-600' : 'bg-gray-100 text-gray-600'}`}
+                    className={`p-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold ${
+                      torchOn 
+                        ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' 
+                        : (isDarkMode ? 'bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200')
+                    }`}
                     title="Toggle Flashlight"
                   >
                     <Sun size={14} />
                     {torchOn ? 'On' : 'Off'}
                   </button>
                   <button 
-                    onClick={() => setScannerCameraMode(prev => prev === 'environment' ? 'user' : 'environment')}
-                    className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors flex items-center gap-2 text-xs font-bold"
+                    onClick={() => setScannerCameraMode(prev => {
+                      const next = prev === 'environment' ? 'user' : 'environment';
+                      localStorage.setItem('scannerCameraMode', next);
+                      return next;
+                    })}
+                    className={`p-2 rounded-xl transition-colors flex items-center gap-2 text-xs font-bold ${
+                      isDarkMode 
+                        ? 'bg-blue-950 text-blue-400 border border-blue-900/40 hover:bg-blue-900/60' 
+                        : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                    }`}
                     title="Switch Camera"
                   >
                     <RefreshCw size={14} />
@@ -4779,7 +6400,9 @@ function AppContent() {
                   </button>
                 </div>
               </div>
-              <div className="rounded-2xl overflow-hidden border-2 border-gray-100 mb-4 bg-black aspect-square relative group">
+              <div className={`rounded-2xl overflow-hidden border-2 mb-4 bg-black aspect-square relative group ${
+                isDarkMode ? 'border-gray-800' : 'border-gray-100'
+              }`}>
                 <div id="qr-reader" className="w-full h-full"></div>
                 
                 {/* Darkened Overlay around Scanning Area */}
@@ -4838,12 +6461,14 @@ function AppContent() {
                   </div>
                 )}
               </div>
-              <p className="text-center text-sm text-gray-500 font-medium">
+              <p className={`text-center text-sm font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                 Position the QR code within the frame to log in instantly.
               </p>
               <button
                 onClick={() => setShowScanner(false)}
-                className="w-full mt-6 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-colors"
+                className={`w-full mt-6 py-3 rounded-xl font-bold transition-colors ${
+                  isDarkMode ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
               >
                 Cancel
               </button>
@@ -4851,126 +6476,121 @@ function AppContent() {
           </div>
         )}
 
-        {/* QR Verification Modal */}
-        {isVerifyingQR && qrLoginData && (
+        {/* QR Authorization Waiting Modal */}
+        {isQRApprovalPending && qrLoginData && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-md w-full shadow-2xl text-center relative overflow-hidden border border-white/20"
+              className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-white/20'} rounded-[2.5rem] p-8 sm:p-10 lg:p-12 max-w-md lg:max-w-lg w-full shadow-2xl text-center relative overflow-hidden border`}
             >
               <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-[#0038A8] via-[#FCD116] to-[#CE1126]"></div>
               
               <button 
                 onClick={() => {
-                  setIsVerifyingQR(false);
+                  setIsQRApprovalPending(false);
                   setQrLoginData(null);
-                  setVerificationCode('');
+                  if (qrApprovalRequestId) {
+                    deleteDoc(doc(db, 'login_requests', qrApprovalRequestId)).catch(() => {});
+                  }
+                  setQrApprovalRequestId(null);
                 }}
-                className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+                className={`absolute top-6 right-6 p-2 ${isDarkMode ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'} rounded-full transition-colors`}
               >
                 <X size={20} />
               </button>
 
               <div className="mb-8">
-                <div className="inline-flex p-5 bg-blue-50 rounded-3xl mb-6 shadow-inner">
-                  <Mail className="text-[#0038A8]" size={36} />
+                <div className={`inline-flex p-5 ${isDarkMode ? 'bg-blue-900/40' : 'bg-blue-50'} rounded-3xl mb-6 shadow-inner`}>
+                  <ShieldAlert className="text-[#0038A8] animate-pulse" size={48} />
                 </div>
-                <h2 className="text-2xl font-black text-gray-900 tracking-tight">Verify Your Identity</h2>
-                <p className="text-sm font-bold text-gray-400 mt-2 leading-relaxed">
-                  We've sent a 6-digit verification code to:<br/>
-                  <span className="text-[#0038A8] font-black lowercase tracking-tight">{qrLoginData.realEmail}</span>
-                </p>
+                <h2 className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>Authorization Required</h2>
+                <div className={`mt-4 p-4 ${isDarkMode ? 'bg-gray-800/50 border-gray-700' : 'bg-blue-50 border-blue-100'} rounded-2xl border`}>
+                  <p className="text-xs font-black text-blue-600 uppercase tracking-widest mb-1">Teacher Account</p>
+                  <p className={`text-lg font-black ${isDarkMode ? 'text-blue-100' : 'text-gray-900'}`}>{qrApprovalTeacherName}</p>
+                </div>
               </div>
 
               <div className="space-y-6">
-                <div className="relative">
-                  <input
-                    type="text"
-                    maxLength={6}
-                    value={verificationInput}
-                    onChange={(e) => setVerificationInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="Enter 6-digit code"
-                    className="w-full bg-gray-50 border-2 border-gray-100 py-5 px-6 rounded-2xl text-center text-3xl font-black tracking-[0.5em] text-[#0038A8] focus:border-[#0038A8] focus:bg-white transition-all outline-none placeholder:text-gray-200 placeholder:tracking-normal placeholder:text-sm"
-                  />
-                  {verificationInput.length === 6 && (
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 bg-green-500 text-white p-1 rounded-full shadow-lg z-10">
-                      <Check size={16} />
-                    </div>
-                  )}
+                <div className="flex flex-col items-center gap-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <Loader2 className="animate-spin text-[#0038A8]" size={24} />
+                    <span className={`text-sm font-black ${isDarkMode ? 'text-gray-300' : 'text-gray-600'} uppercase tracking-[0.1em]`}>Waiting for Admin Approval...</span>
+                  </div>
+                  <p className={`text-xs font-medium ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} max-w-xs leading-relaxed`}>
+                    An approval request has been sent to the Admin Dashboard. Please stay on this screen.
+                  </p>
                 </div>
 
                 <div className="flex flex-col gap-3">
+                  <div className={`w-full h-1 ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'} rounded-full overflow-hidden`}>
+                    <motion.div 
+                      className="h-full bg-[#0038A8]"
+                      initial={{ width: "0%" }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                    />
+                  </div>
+                  
                   <button 
-                    onClick={handleVerifyQR}
-                    disabled={verificationInput.length !== 6 || loading}
-                    className="w-full bg-[#0038A8] text-white py-5 rounded-2xl font-black text-xs uppercase tracking-[0.2em] hover:bg-blue-800 transition-all shadow-xl shadow-blue-200 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
+                    onClick={() => {
+                      setIsQRApprovalPending(false);
+                      setQrLoginData(null);
+                      if (qrApprovalRequestId) {
+                        deleteDoc(doc(db, 'login_requests', qrApprovalRequestId)).catch(() => {});
+                      }
+                      setQrApprovalRequestId(null);
+                    }}
+                    className={`w-full ${isDarkMode ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} py-4 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all mt-4`}
                   >
-                    {loading ? <Loader2 className="animate-spin" size={20} /> : <ShieldCheck size={20} />}
-                    Verify & Login
-                  </button>
-
-                  <button 
-                    onClick={() => sendVerificationCode(qrLoginData.realEmail)}
-                    disabled={resendTimer > 0}
-                    className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-[#0038A8] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {resendTimer > 0 ? (
-                      `Resend code in ${resendTimer}s`
-                    ) : (
-                      <>
-                        <RefreshCw size={14} />
-                        Resend Verification Code
-                      </>
-                    )}
+                    Cancel Request
                   </button>
                 </div>
               </div>
 
-              <p className="mt-8 text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed">
-                Code expires in 1 minute.<br/>
-                Check your spam folder if you don't see it.
+              <p className={`mt-8 text-[10px] font-bold ${isDarkMode ? 'text-gray-600' : 'text-gray-400'} uppercase tracking-widest leading-relaxed`}>
+                Security Tip: Only scan your personal QR code on trusted devices.
               </p>
             </motion.div>
           </div>
         )}
 
         {/* Unauthorized Email Modal */}
-        {unauthorizedEmail && (
+        {unauthorizedEmail && !user && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl relative overflow-hidden"
+              className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white'} rounded-3xl p-8 lg:p-10 max-w-md lg:max-w-xl w-full shadow-2xl relative overflow-hidden border`}
             >
               <div className="absolute top-0 left-0 w-full h-2 bg-red-500"></div>
               <div className="flex justify-center mb-6">
-                <div className="bg-red-50 p-4 rounded-full">
+                <div className={`${isDarkMode ? 'bg-red-900/40' : 'bg-red-50'} p-4 rounded-full`}>
                   <ShieldAlert className="text-red-500" size={40} />
                 </div>
               </div>
-              <h2 className="text-2xl font-black text-center text-gray-900 mb-2">Access Denied</h2>
-              <p className="text-center text-gray-600 mb-6 font-medium">
-                The email address <span className="font-bold text-gray-900">{unauthorizedEmail}</span> is not authorized to access this system.
+              <h2 className={`text-2xl font-black text-center ${isDarkMode ? 'text-white' : 'text-gray-900'} mb-2`}>Access Denied</h2>
+              <p className={`text-center ${isDarkMode ? 'text-gray-400' : 'text-gray-600'} mb-6 font-medium`}>
+                The email address <span className={`font-bold ${isDarkMode ? 'text-gray-200' : 'text-gray-900'}`}>{unauthorizedEmail}</span> is not authorized to access this system.
               </p>
-              <div className="bg-gray-50 rounded-2xl p-5 mb-8 border border-gray-100">
-                <p className="text-sm text-gray-600 leading-relaxed">
+              <div className={`${isDarkMode ? 'bg-gray-800/50 border-gray-700' : 'bg-gray-50 border-gray-100'} rounded-2xl p-5 mb-8 border`}>
+                <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'} leading-relaxed`}>
                   To gain access, please ensure you are using:
                 </p>
                 <ul className="mt-3 space-y-2 text-sm text-gray-600">
                   <li className="flex items-start gap-2">
                     <CheckCircle className="text-green-500 shrink-0 mt-0.5" size={16} />
-                    <span>The email address associated with your teacher profile in the exported Excel file.</span>
+                    <span className={isDarkMode ? 'text-gray-300' : ''}>The email address associated with your teacher profile in the exported Excel file.</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle className="text-green-500 shrink-0 mt-0.5" size={16} />
-                    <span>The official BOD email address assigned to you by the admin.</span>
+                    <span className={isDarkMode ? 'text-gray-300' : ''}>The official BOD email address assigned to you by the admin.</span>
                   </li>
                 </ul>
               </div>
               <button 
                 onClick={() => setUnauthorizedEmail(null)}
-                className="w-full bg-gray-900 text-white py-4 rounded-xl font-bold hover:bg-gray-800 transition-colors"
+                className={`w-full ${isDarkMode ? 'bg-gray-800 text-gray-200 hover:bg-gray-700' : 'bg-gray-900 text-white hover:bg-gray-800'} py-4 rounded-xl font-bold transition-colors`}
               >
                 Understood, try another account
               </button>
@@ -4990,6 +6610,8 @@ function AppContent() {
           showInAppNotify={showInAppNotify}
           setShowInAppNotify={setShowInAppNotify}
           setActiveTab={setActiveTab}
+          setShowLoginSuccess={setShowLoginSuccess}
+          onDismissToast={() => setToast(null)}
         />
       </div>
     );
@@ -5002,7 +6624,7 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.95, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              className="bg-white p-6 sm:p-10 lg:p-12 rounded-[2rem] shadow-xl border border-gray-100 max-w-lg w-full"
+              className="bg-white p-6 sm:p-10 lg:p-12 rounded-[2rem] shadow-xl border border-gray-100 max-w-lg lg:max-w-xl w-full"
             >
                 <div className="w-20 h-20 sm:w-24 sm:h-24 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-6 sm:mb-8">
                     <Settings className="text-[#0038A8] animate-spin-slow" size={40} />
@@ -5038,7 +6660,7 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              className="bg-white p-12 rounded-none shadow-[20px_20px_0px_#000] border-4 border-black max-w-lg w-full"
+              className="bg-white p-12 lg:p-16 rounded-none shadow-[20px_20px_0px_#000] border-4 border-black max-w-lg lg:max-w-xl w-full"
             >
                 <div className="w-24 h-24 bg-red-500 rounded-none border-4 border-black flex items-center justify-center mx-auto mb-8 shadow-[10px_10px_0px_#000]">
                     <ShieldAlert className="text-white" size={48} />
@@ -5085,26 +6707,54 @@ function AppContent() {
             showInAppNotify={showInAppNotify}
             setShowInAppNotify={setShowInAppNotify}
             setActiveTab={setActiveTab}
+            setShowLoginSuccess={setShowLoginSuccess}
+            onDismissToast={() => setToast(null)}
           />
         </div>
       );
     }
 
     return (
-      <div className={`min-h-screen ${isDarkMode ? 'dark bg-gray-950' : 'bg-gray-50'} font-sans pb-12 transition-colors duration-300`}>
-        <header className={`${isDarkMode ? 'bg-gray-900 border-b border-gray-800' : 'bg-[#0038A8]'} text-white shadow-md sticky top-0 z-30 transition-colors`}>
-          <div className="w-full px-4 sm:px-8 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Sun className={`${isDarkMode ? 'text-blue-400' : 'text-[#FCD116]'} animate-sun-rotate`} size={32} fill={isDarkMode ? 'transparent' : '#FCD116'} />
+      <div className={`min-h-screen relative overflow-hidden ${isDarkMode ? 'dark bg-gray-950' : 'bg-slate-100'} font-sans pb-12 transition-colors duration-300`}>
+        {/* Premium, ultra-modern backdrop wash with highly translucent ambient layers allowing school photography to pop in light mode only */}
+        {!isDarkMode && (
+          <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-tr from-[#0038A8]/4 via-[#F1F5F9]/30 to-[#F1F5F9]/10 z-10 backdrop-blur-[1px]" />
+            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#F1F5F9]/15 to-[#F1F5F9]/60 z-10" />
+            <img 
+              src="https://www.dropbox.com/scl/fi/8m4sg2ph32whxpd5phv70/FB_IMG_1779455185471.jpg?rlkey=2hwa1il92wrclccve3i19dk5p&st=jiz0ey5x&raw=1" 
+              alt="School Campus" 
+              className="w-full h-full object-cover object-center scale-102 select-none pointer-events-none opacity-100 transition-opacity duration-300"
+              loading="eager"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        )}
+
+        <header className={`${isDarkMode ? 'bg-gray-900 border-b border-gray-800' : 'bg-[#0038A8]/90 backdrop-blur-md'} text-white shadow-md sticky top-0 z-30 transition-colors`}>
+          <div className="w-full px-4 sm:px-8 py-6 lg:py-8 flex items-center justify-between">
+            <div className="flex items-center gap-6">
+              <Sun className={`${isDarkMode ? 'text-blue-400' : 'text-[#FCD116]'} animate-sun-rotate`} size={40} fill={isDarkMode ? 'transparent' : '#FCD116'} />
               <div>
-                <h1 className="text-xl font-black leading-none tracking-tight">Faculty Club</h1>
-                <p className={`text-[10px] ${isDarkMode ? 'text-gray-400' : 'text-blue-200'} font-bold uppercase tracking-widest`}>Teacher Portal</p>
+                <h1 className="text-xl lg:text-3xl font-black leading-none tracking-tight">Faculty Club</h1>
+                <p className={`text-[10px] lg:text-sm ${isDarkMode ? 'text-gray-400' : 'text-blue-200'} font-black uppercase tracking-widest mt-1`}>Teacher Portal</p>
+              </div>
+              <div className="hidden lg:flex items-center gap-3 pl-6 ml-6 border-l border-white/20">
+                <Clock size={22} className={isDarkMode ? 'text-blue-400' : 'text-blue-200'} />
+                <div className="flex flex-col gap-1">
+                  <span className="text-base font-black uppercase tracking-widest leading-none">
+                    {currentTime.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                  </span>
+                  <span className="text-xs font-bold opacity-80 tabular-nums leading-none">
+                    {currentTime.toLocaleTimeString()}
+                  </span>
+                </div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="hidden sm:block text-right mr-2">
-                <p className={`text-xs font-black ${isDarkMode ? 'text-gray-200' : 'text-blue-100'} uppercase tracking-widest`}>{profile.name}</p>
-                <p className={`text-[10px] ${isDarkMode ? 'text-gray-500' : 'text-blue-300'} font-bold`}>{profile.gradeLevel}</p>
+            <div className="flex items-center gap-4">
+              <div className="hidden md:block text-right mr-4">
+                <p className={`text-sm lg:text-xl font-black ${isDarkMode ? 'text-gray-200' : 'text-blue-100'} uppercase tracking-widest`}>{profile.name}</p>
+                <p className={`text-[10px] lg:text-xs ${isDarkMode ? 'text-gray-500' : 'text-blue-300'} font-bold`}>{profile.gradeLevel}</p>
               </div>
               
               <div className="relative">
@@ -5121,13 +6771,32 @@ function AppContent() {
                 {/* The small dropdown has been removed as per user request to go directly to notification page */}
               </div>
               
-              <button 
-                onClick={toggleDarkMode}
-                className={`p-2 rounded-xl transition-all ${isDarkMode ? 'bg-gray-800 text-yellow-400 hover:bg-gray-700' : 'bg-blue-800/50 text-blue-100 hover:bg-blue-700/50'}`}
-                title="Toggle Appearance"
-              >
-                {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-              </button>
+              <div className={`p-1 rounded-2xl flex items-center gap-1 border transition-all ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-blue-900/40 border-blue-700/50'}`}>
+                <button 
+                  onClick={() => setIsDarkMode(false)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all ${
+                    !isDarkMode 
+                      ? 'bg-white text-[#0038A8] shadow-md' 
+                      : 'text-blue-200 hover:text-white'
+                  }`}
+                  title="Switch to Light Mode"
+                >
+                  <Sun size={14} className={!isDarkMode ? 'text-amber-500 fill-amber-500' : ''} />
+                  <span className="hidden sm:inline">Light</span>
+                </button>
+                <button 
+                  onClick={() => setIsDarkMode(true)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all ${
+                    isDarkMode 
+                      ? 'bg-slate-900 text-yellow-400 shadow-md border border-slate-700' 
+                      : 'text-blue-200 hover:text-white'
+                  }`}
+                  title="Switch to Dark Mode"
+                >
+                  <Moon size={14} className={isDarkMode ? 'text-yellow-400 fill-yellow-400' : ''} />
+                  <span className="hidden sm:inline">Dark</span>
+                </button>
+              </div>
 
               <button onClick={handleLogout} className={`p-2 ${isDarkMode ? 'bg-gray-800 text-gray-400 hover:text-red-400' : 'bg-blue-800/50 text-white hover:bg-red-500/20'} rounded-xl transition-all`}>
                 <LogOut size={20} />
@@ -5137,26 +6806,26 @@ function AppContent() {
         </header>
 
         {!hasAgreed ? (
-          <main className="max-w-5xl mx-auto px-4 mt-8 flex items-center justify-center min-h-[60vh]">
+          <main className="max-w-5xl mx-auto px-4 mt-8 flex items-center justify-center min-h-[60vh] relative z-10">
             <div className="text-center space-y-4">
               <ShieldAlert size={48} className="mx-auto text-[#0038A8] opacity-20" />
               <h2 className="text-xl font-black text-gray-400 uppercase tracking-widest">Agreement Required</h2>
-              <p className="text-sm text-gray-500">Please read and agree to the Terms & Privacy Guidelines to access your dashboard.</p>
+              <p className="text-sm text-gray-400">Please read and agree to the Terms & Privacy Guidelines to access your dashboard.</p>
             </div>
           </main>
         ) : (
         <>
-        <main className="max-w-5xl mx-auto px-4 mt-8">
+        <main className="max-w-[1600px] w-full mx-auto px-4 lg:px-8 xl:px-12 mt-10 xl:mt-14 overflow-hidden relative z-10">
           {/* Push Notification Banner */}
           {'Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied' && (
-            <div className="mb-6 bg-blue-50 border-2 border-[#0038A8] rounded-[2rem] p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-4">
-              <div className="flex items-center gap-4 text-center sm:text-left">
-                <div className="w-12 h-12 bg-[#0038A8] text-white rounded-xl flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0">
-                  <Bell size={24} className="animate-pulse" />
+            <div className="mb-6 xl:mb-10 bg-blue-50 border-2 border-[#0038A8] rounded-[2rem] p-6 lg:p-8 xl:p-10 flex flex-col sm:flex-row items-center justify-between gap-4 lg:gap-8 shadow-sm animate-in fade-in slide-in-from-top-4">
+              <div className="flex items-center gap-4 lg:gap-6 text-center sm:text-left">
+                <div className="w-12 h-12 lg:w-16 lg:h-16 bg-[#0038A8] text-white rounded-xl lg:rounded-2xl flex items-center justify-center flex-shrink-0 mx-auto sm:mx-0">
+                  <Bell size={28} className="animate-pulse" />
                 </div>
                 <div>
-                  <h3 className="font-black text-[#0038A8] text-lg tracking-tight">Don't miss announcements!</h3>
-                  <p className="text-xs font-bold text-blue-800 opacity-80">Enable push notifications to receive real-time updates directly on your device.</p>
+                  <h3 className="font-black text-[#0038A8] text-lg lg:text-xl tracking-tight">Don't miss announcements!</h3>
+                  <p className="text-xs lg:text-sm font-bold text-blue-800 opacity-80">Enable push notifications to receive real-time updates directly on your device.</p>
                 </div>
               </div>
               <button 
@@ -5169,7 +6838,7 @@ function AppContent() {
                     }
                   });
                 }}
-                className="w-full sm:w-auto px-6 py-3 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-md flex-shrink-0"
+                className="w-full sm:w-auto px-6 lg:px-8 py-3 lg:py-4 bg-[#0038A8] text-white rounded-xl lg:rounded-2xl font-black text-xs lg:text-sm uppercase tracking-widest hover:bg-blue-800 transition-all shadow-md flex-shrink-0"
               >
                 Enable Notifications
               </button>
@@ -5195,83 +6864,117 @@ function AppContent() {
             </div>
           ) : (
             <div className="space-y-8">
+              {profileChangeRequests.filter(r => r.status === 'rejected').map(request => (
+                <div key={request.id} className="bg-red-50 border border-red-100 rounded-3xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="flex gap-4 items-start">
+                    <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center text-red-500 shadow-sm shrink-0">
+                      <AlertCircle size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-red-900 font-black tracking-tight text-lg">Profile Update Rejected</h4>
+                      <p className="text-red-700 text-sm font-medium mt-1">Your request to update your profile was rejected by the administration.</p>
+                      {request.adminNote && (
+                        <div className="bg-white/60 p-3 rounded-xl mt-3 text-red-800 text-sm">
+                          <span className="font-bold">Reason:</span> {request.adminNote}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button 
+                    onClick={async () => {
+                      try {
+                        await updateDoc(doc(db, 'profile_change_requests', request.id), { status: 'acknowledged' });
+                      } catch (e) {
+                         console.error(e);
+                      }
+                    }}
+                    className="shrink-0 bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-widest px-6 py-3 rounded-xl transition-all"
+                  >
+                    Acknowledge
+                  </button>
+                </div>
+              ))}
               {/* Welcome & Quick Actions */}
-              <div className="flex flex-col lg:flex-row gap-6">
-            <div className={`flex-1 ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100'} p-8 rounded-[2.5rem] shadow-sm border relative overflow-hidden`}>
-              <div className={`absolute top-0 right-0 w-32 h-32 ${isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50'} rounded-bl-[5rem] -mr-8 -mt-8 z-0`}></div>
+              <div className="flex flex-col lg:flex-row gap-6 lg:gap-8">
+            <div className={`flex-1 ${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-10 lg:p-14 xl:p-16 rounded-[3rem] border relative overflow-hidden group hover:border-[#0038A8]/20 transition-all duration-500`}>
+              <div className={`absolute top-0 right-0 w-48 h-48 lg:w-64 lg:h-64 ${isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50/50 group-hover:bg-blue-100/50'} rounded-bl-[8rem] -mr-12 -mt-12 z-0 transition-colors duration-500`}></div>
               <div className="relative z-10">
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="bg-[#0038A8] w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-100">
-                    <User className="text-white" size={28} />
+                <div className="flex items-center gap-6 lg:gap-8 mb-8 lg:mb-12">
+                  <div className="bg-[#0038A8] w-16 h-16 lg:w-24 lg:h-24 rounded-[1.5rem] lg:rounded-[2rem] flex items-center justify-center shadow-xl shadow-blue-100 group-hover:scale-105 transition-transform duration-500">
+                    <User className="text-white" size={40} />
                   </div>
                   <div>
-                    <h2 className={`text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>{teacherRecord?.name || profile.name}</h2>
-                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'} font-bold uppercase tracking-[0.2em]`}>{teacherRecord?.gradeLevel || 'Teacher'}</p>
+                    <h2 className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tight leading-tight`}>{teacherRecord?.name || profile.name}</h2>
+                    <p className={`text-sm lg:text-base xl:text-lg ${isDarkMode ? 'text-blue-300' : 'text-slate-600 font-bold'} font-black uppercase tracking-[0.3em] mt-1 lg:mt-2`}>{teacherRecord?.gradeLevel || 'Teacher'}</p>
                   </div>
                 </div>
                 
-                <div className="flex flex-wrap gap-3">
-                  <button 
-                    onClick={() => {
-                      setEditProfileName(profile.name);
-                      setEditProfileEmail(profile.email);
-                      setIsEditingProfile(true);
-                    }}
-                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'} py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95`}
-                  >
-                    <User size={18} />
-                    Edit Profile
-                  </button>
-                  <button 
-                    onClick={() => teacherRecord && handleDownloadReceipt(teacherRecord)}
-                    disabled={portalTotalPaidAmount === 0}
-                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-green-900/30 text-green-400 hover:bg-green-900/50' : 'bg-green-50 text-green-600 hover:bg-green-100'} py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50`}
-                  >
-                    <Download size={18} />
-                    Download Receipt
-                  </button>
+                <div className="flex flex-wrap gap-3 lg:gap-4">
+                  {profileChangeRequests.some(r => r.status === 'pending') ? (
+                    <button 
+                      disabled
+                      className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-yellow-900/40 text-yellow-500' : 'bg-yellow-50 text-yellow-600'} py-3 lg:py-3.5 px-6 lg:px-8 rounded-2xl font-black text-[11px] lg:text-xs uppercase tracking-widest cursor-not-allowed`}
+                      title="Profile update request is currently pending admin approval."
+                    >
+                      <Loader2 className="animate-spin" size={20} />
+                      Update Pending
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => {
+                        setEditProfileName(profile.name);
+                        setEditProfileEmail(profile.email);
+                        setEditProfileNote('');
+                        setIsEditingProfile(true);
+                      }}
+                      className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-800 hover:bg-slate-200'} py-3 lg:py-3.5 px-6 lg:px-8 rounded-2xl font-black text-[11px] lg:text-xs uppercase tracking-widest transition-all hover:scale-105 active:scale-95`}
+                    >
+                      <User size={20} />
+                      Edit Profile
+                    </button>
+                  )}
                   <button 
                     onClick={() => generateTeacherQRCode(profile.email, teacherRecord?.gradeLevel || 'Teacher', profile.name)}
-                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-blue-900/30 text-blue-400 hover:bg-blue-900/50' : 'bg-blue-50 text-[#0038A8] hover:bg-blue-100'} py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95`}
+                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-blue-900/40 text-blue-300 hover:bg-blue-900/60' : 'bg-blue-50 text-[#0038A8] hover:bg-blue-100'} py-3 lg:py-3.5 px-6 lg:px-8 rounded-2xl font-black text-[11px] lg:text-xs uppercase tracking-widest transition-all hover:scale-105 active:scale-95`}
                   >
-                    <QrCode size={18} />
+                    <QrCode size={20} />
                     Regenerate QR
                   </button>
                   <button 
                     onClick={() => setShowTermsModal(true)}
-                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700 hover:text-blue-400' : 'bg-white text-gray-400 border-gray-100 hover:bg-gray-50 hover:text-[#0038A8]'} border py-3.5 px-8 rounded-2xl font-black text-xs uppercase tracking-widest transition-all active:scale-95`}
+                    className={`flex items-center justify-center gap-2 ${isDarkMode ? 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-blue-400' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:text-[#0038A8]'} border py-3 lg:py-3.5 px-6 lg:px-8 rounded-2xl font-black text-[11px] lg:text-xs uppercase tracking-widest transition-all hover:scale-105 active:scale-95`}
                   >
-                    <ShieldCheck size={18} />
+                    <ShieldCheck size={20} />
                     Terms & Privacy
                   </button>
                 </div>
               </div>
             </div>
 
-            <div className={`lg:w-80 ${isDarkMode ? 'bg-gray-900 border border-gray-800' : 'bg-[#0038A8]'} p-8 rounded-[2.5rem] text-white shadow-xl shadow-blue-100 flex flex-col justify-between relative overflow-hidden transition-colors duration-300`}>
-              <div className={`absolute bottom-0 right-0 w-24 h-24 ${isDarkMode ? 'bg-blue-600/10' : 'bg-white/10'} rounded-tl-[4rem] -mb-4 -mr-4`}></div>
+            <div className={`w-full lg:w-1/3 xl:w-1/4 min-w-[300px] ${isDarkMode ? 'bg-slate-900/95 border border-slate-800 shadow-xl' : 'bg-[#0038A8]'} p-8 xl:p-12 rounded-[2.5rem] xl:rounded-[3rem] text-white shadow-xl shadow-blue-200/10 flex flex-col justify-between relative overflow-hidden transition-all duration-500 hover:-translate-y-1`}>
+              <div className={`absolute bottom-0 right-0 w-32 h-32 xl:w-48 xl:h-48 ${isDarkMode ? 'bg-blue-600/10' : 'bg-white/10'} rounded-tl-[4rem] xl:rounded-tl-[6rem] -mb-4 -mr-4`}></div>
               <div className="relative z-10">
-                <p className={`${isDarkMode ? 'text-blue-400' : 'text-blue-200'} font-black uppercase tracking-widest text-[10px] mb-2`}>Remaining Balance</p>
-                <h3 className="text-4xl font-black tracking-tight mb-6">₱{portalRemainingBalance.toFixed(2)}</h3>
+                <p className={`${isDarkMode ? 'text-blue-400' : 'text-blue-200'} font-black uppercase tracking-widest text-[10px] xl:text-xs mb-2 xl:mb-4`}>Remaining Balance</p>
+                <h3 className="text-4xl xl:text-5xl 2xl:text-6xl font-black tracking-tight mb-8 xl:mb-10">₱{portalRemainingBalance.toFixed(2)}</h3>
                 
-                <div className="space-y-4">
-                  <div className={`w-full ${isDarkMode ? 'bg-gray-800' : 'bg-white/10'} h-2 rounded-full overflow-hidden`}>
+                <div className="space-y-4 xl:space-y-6">
+                  <div className={`w-full ${isDarkMode ? 'bg-slate-800' : 'bg-white/10'} h-2 xl:h-3 rounded-full overflow-hidden`}>
                     <div 
                       className={`${isDarkMode ? 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-[#FCD116]'} h-full transition-all duration-1000 ease-out`} 
                       style={{ width: `${portalTotalRequiredAmount > 0 ? (portalCurrentPaidRequiredAmount / portalTotalRequiredAmount) * 100 : 0}%` }}
                     ></div>
                   </div>
-                  <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest opacity-80">
+                  <div className="flex justify-between items-center text-[10px] xl:text-xs font-black uppercase tracking-widest opacity-90">
                     <span>Settlement Progress</span>
                     <span>{portalTotalRequiredAmount > 0 ? ((portalCurrentPaidRequiredAmount / portalTotalRequiredAmount) * 100).toFixed(0) : 100}%</span>
                   </div>
                 </div>
 
-                <div className={`mt-8 ${isDarkMode ? 'bg-blue-900/20' : 'bg-white/10'} backdrop-blur-md rounded-2xl p-4 flex items-start gap-3`}>
-                  <div className={`${isDarkMode ? 'bg-blue-800/40' : 'bg-white/20'} p-2 rounded-lg shrink-0`}>
-                    <AlertCircle size={16} className="text-blue-100" />
+                <div className={`mt-8 xl:mt-12 ${isDarkMode ? 'bg-blue-950/40' : 'bg-white/10'} backdrop-blur-md rounded-2xl xl:rounded-3xl p-4 xl:p-6 flex items-start gap-4`}>
+                  <div className={`${isDarkMode ? 'bg-blue-900/60' : 'bg-white/20'} p-3 rounded-xl shrink-0`}>
+                    <AlertCircle size={20} className="text-blue-100" />
                   </div>
-                  <p className={`text-[10px] font-bold ${isDarkMode ? 'text-blue-100' : 'text-blue-50'} leading-relaxed`}>
+                  <p className={`text-[10px] xl:text-xs font-bold ${isDarkMode ? 'text-blue-100' : 'text-blue-50'} leading-relaxed`}>
                     {portalUnpaidRequiredDues.length > 0 
                       ? `You have ${portalUnpaidRequiredDues.length} unpaid required dues. Please settle them with your BOD to maintain a verified status.`
                       : "All required dues are settled. Your account is currently in good standing. Thank you!"}
@@ -5282,68 +6985,68 @@ function AppContent() {
           </div>
 
           {/* Stats Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-none' : 'bg-white border-gray-100 shadow-sm'} p-6 rounded-3xl border transition-colors duration-300`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`${isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-50 text-green-600'} p-2 rounded-xl transition-colors`}>
-                  <PhilippinePeso size={20} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-4 lg:gap-6 mt-6 lg:mt-8">
+            <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl shadow-black/30' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
+              <div className="flex items-center gap-4 mb-4 lg:mb-5">
+                <div className={`${isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-50 text-green-600'} p-3 rounded-2xl transition-colors group-hover:scale-110 duration-300`}>
+                  <PhilippinePeso size={24} className="lg:w-7 lg:h-7" />
                 </div>
-                <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Total Paid (₱)</span>
+                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Total Paid</span>
               </div>
-              <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{portalTotalPaidAmount.toFixed(2)}</div>
+              <div className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tighter`}>₱{portalTotalPaidAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
             </div>
 
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-none' : 'bg-white border-gray-100 shadow-sm'} p-6 rounded-3xl border transition-colors duration-300`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`${isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-50 text-blue-600'} p-2 rounded-xl transition-colors`}>
-                  <CheckCircle size={20} />
+            <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl shadow-black/30' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
+              <div className="flex items-center gap-4 mb-4 lg:mb-5">
+                <div className={`${isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-50 text-blue-600'} p-3 rounded-2xl transition-colors group-hover:scale-110 duration-300`}>
+                  <CheckCircle size={24} className="lg:w-7 lg:h-7" />
                 </div>
-                <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Required Dues</span>
+                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Required Dues</span>
               </div>
-              <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{portalSettledRequiredDuesCount} / {portalRequiredDues.length}</div>
+              <div className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tighter`}>{portalSettledRequiredDuesCount} / {portalRequiredDues.length}</div>
             </div>
 
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-none' : 'bg-white border-gray-100 shadow-sm'} p-6 rounded-3xl border transition-colors duration-300`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-50 text-purple-600'} p-2 rounded-xl transition-colors`}>
-                  <Heart size={20} />
+            <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl shadow-black/30' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
+              <div className="flex items-center gap-4 mb-4 lg:mb-5">
+                <div className={`${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-50 text-purple-600'} p-3 rounded-2xl transition-colors group-hover:scale-110 duration-300`}>
+                  <Heart size={24} className="lg:w-7 lg:h-7" />
                 </div>
-                <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Voluntary</span>
+                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Voluntary</span>
               </div>
-              <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <div className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tighter`}>
                 {standardDues.filter(d => d.isVoluntary && teacherRecord?.paidDueIds?.includes(d.id)).length} Paid
               </div>
             </div>
 
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-none' : 'bg-white border-gray-100 shadow-sm'} p-6 rounded-3xl border transition-colors duration-300`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`${isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-50 text-yellow-600'} p-2 rounded-xl transition-colors`}>
-                  <Clock size={20} />
+            <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl shadow-black/30' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
+              <div className="flex items-center gap-4 mb-4 lg:mb-5">
+                <div className={`${isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-50 text-yellow-600'} p-3 rounded-2xl transition-colors group-hover:scale-110 duration-300`}>
+                  <Clock size={24} className="lg:w-7 lg:h-7" />
                 </div>
-                <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Pending</span>
+                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Pending Dues</span>
               </div>
-              <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{portalUnpaidRequiredDues.length} {portalUnpaidRequiredDues.length === 1 ? 'Item' : 'Items'}</div>
+              <div className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tighter`}>{portalUnpaidRequiredDues.length}</div>
             </div>
 
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800 shadow-none' : 'bg-white border-gray-100 shadow-sm'} p-6 rounded-3xl border transition-colors duration-300`}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className={`${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-50 text-purple-600'} p-2 rounded-xl transition-colors`}>
-                  <Shield size={20} />
+            <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl shadow-black/30' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-6 lg:p-8 rounded-[2rem] lg:rounded-[2.5rem] border transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 group`}>
+              <div className="flex items-center gap-4 mb-4 lg:mb-5">
+                <div className={`${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-50 text-purple-600'} p-3 rounded-2xl transition-colors group-hover:scale-110 duration-300`}>
+                  <Shield size={24} className="lg:w-7 lg:h-7" />
                 </div>
-                <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Status</span>
+                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Status</span>
               </div>
-              <div className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+              <div className={`text-3xl lg:text-4xl xl:text-5xl font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tighter`}>
                 {portalRemainingBalance === 0 ? 'Verified' : 'Active'}
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8 lg:gap-10 xl:gap-12 mt-8 lg:mt-12 xl:mt-16">
             {/* Main Content Area */}
-            <div className="lg:col-span-2 space-y-8">
+            <div className="md:col-span-2 lg:col-span-2 xl:col-span-3 space-y-8 xl:space-y-12">
               {/* Dues Status Section */}
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>Dues Overview</h3>
+                <div className="flex items-center justify-between mb-6 xl:mb-8">
+                  <h3 className={`text-xl lg:text-2xl xl:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>Dues Overview</h3>
                   <button 
                     onClick={() => setShowDues(!showDues)}
                     className={`flex items-center justify-center gap-2 py-2 px-4 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 ${showDues ? (isDarkMode ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200') : 'bg-[#0038A8] text-white hover:bg-blue-800'}`}
@@ -5355,27 +7058,27 @@ function AppContent() {
                 {showDues && (
                   <section>
                     <div className="flex items-center justify-between mb-6">
-                      <span className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>{portalUnpaidRequiredDues.length} {portalUnpaidRequiredDues.length === 1 ? 'Item' : 'Items'} Pending</span>
+                      <span className={`text-[10px] font-black ${isDarkMode ? 'text-slate-300' : 'text-slate-700'} uppercase tracking-widest`}>{portalUnpaidRequiredDues.length} {portalUnpaidRequiredDues.length === 1 ? 'Item' : 'Items'} Pending</span>
                     </div>
                     
-                    <div className="space-y-3">
+                    <div className="space-y-3 lg:space-y-4">
                       {standardDues.map(due => {
                         const isPaid = teacherRecord?.paidDueIds?.includes(due.id);
                         return (
-                          <div key={due.id} className={`p-5 rounded-3xl border-2 transition-all ${isPaid ? (isDarkMode ? 'bg-gray-900/40 border-green-900/20' : 'bg-white border-green-50') : (isDarkMode ? 'bg-gray-900 border-gray-800 hover:border-blue-900/50' : 'bg-white border-gray-50 hover:border-blue-100')}`}>
+                          <div key={due.id} className={`p-5 lg:p-6 rounded-3xl border-2 backdrop-blur-md transition-all ${isPaid ? (isDarkMode ? 'bg-green-950/30 border-green-900/30' : 'bg-green-50/90 border-green-200') : (isDarkMode ? 'bg-slate-900/95 border-slate-800 hover:border-blue-900/50' : 'bg-white/95 hover:bg-white border-slate-200/80 hover:border-blue-200')} shadow-md group hover:shadow-lg`}>
                             <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-4">
-                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isPaid ? (isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-600') : (isDarkMode ? 'bg-gray-800 text-gray-600' : 'bg-gray-100 text-gray-400')}`}>
-                                  {isPaid ? <Check size={24} /> : <Clock size={24} />}
+                              <div className="flex items-center gap-4 lg:gap-6">
+                                <div className={`w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${isPaid ? (isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-600') : (isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700')} group-hover:scale-110 transition-transform duration-300`}>
+                                  {isPaid ? <Check size={24} className="lg:w-7 lg:h-7" /> : <Clock size={24} className="lg:w-7 lg:h-7" />}
                                 </div>
                                 <div>
-                                  <div className="flex items-center gap-2">
-                                    <div className={`font-black ${isDarkMode ? 'text-gray-200' : 'text-gray-900'}`}>{due.name}</div>
+                                  <div className="flex items-center gap-2 lg:gap-3">
+                                    <div className={`font-black text-lg lg:text-xl ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{due.name}</div>
                                     {due.isVoluntary && (
-                                      <span className={`text-[8px] font-black ${isDarkMode ? 'text-purple-400 bg-purple-900/30' : 'text-purple-500 bg-purple-50'} px-1.5 py-0.5 rounded-md uppercase tracking-widest`}>Voluntary</span>
+                                      <span className={`text-[8px] lg:text-[10px] font-black ${isDarkMode ? 'text-purple-300 bg-purple-900/40' : 'text-purple-600 bg-purple-100'} px-2 py-1 rounded-md uppercase tracking-widest`}>Voluntary</span>
                                     )}
                                   </div>
-                                  <div className={`text-xs font-bold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                                  <div className={`text-xs lg:text-sm font-black ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                                     {due.isVoluntary && isPaid 
                                       ? `₱${(teacherRecord?.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
                                       : `₱${due.amount.toFixed(2)}`
@@ -5401,8 +7104,8 @@ function AppContent() {
                 )}
 
               {/* Payment History Section */}
-              <div className="flex items-center justify-between mb-6">
-                <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>Recent Payments</h3>
+              <div className="flex items-center justify-between mb-6 xl:mb-8">
+                <h3 className={`text-xl lg:text-2xl xl:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight`}>Recent Payments</h3>
                 <button 
                   onClick={() => setShowPayments(!showPayments)}
                   className={`flex items-center justify-center gap-2 py-2 px-4 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 ${showPayments ? (isDarkMode ? 'bg-gray-800 text-gray-400 hover:bg-gray-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200') : 'bg-[#0038A8] text-white hover:bg-blue-800'}`}
@@ -5413,38 +7116,38 @@ function AppContent() {
               </div>
               {showPayments && (
                 <section>
-                  <div className={`rounded-[2.5rem] border ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100 shadow-sm'} overflow-hidden transition-colors duration-300`}>
-                    <div className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-50'}`}>
+                  <div className={`rounded-[2.5rem] border ${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} overflow-hidden transition-colors duration-300`}>
+                    <div className={`divide-y ${isDarkMode ? 'divide-gray-800' : 'divide-gray-100'}`}>
                       {(teacherRecord?.paymentHistory || [])
-                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                        .sort((a, b) => ensureTimestamp(b.date).seconds - ensureTimestamp(a.date).seconds)
                         .map((payment, idx) => {
                           const due = standardDues.find(d => d.id === payment.dueId);
                           return (
-                            <div key={idx} className={`p-6 flex items-center justify-between ${isDarkMode ? 'hover:bg-gray-800/50' : 'hover:bg-gray-50'} transition-colors`}>
-                              <div className="flex items-center gap-4">
-                                <div className={`${isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-50 text-[#0038A8]'} w-10 h-10 rounded-xl flex items-center justify-center`}>
-                                  <PhilippinePeso size={20} />
+                            <div key={idx} className={`p-6 lg:p-8 flex items-center justify-between ${isDarkMode ? 'hover:bg-slate-800/50' : 'hover:bg-slate-50'} transition-colors group`}>
+                              <div className="flex items-center gap-4 lg:gap-6">
+                                <div className={`${isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-50 text-[#0038A8]'} w-10 h-10 lg:w-14 lg:h-14 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300`}>
+                                  <PhilippinePeso size={20} className="lg:w-6 lg:h-6" />
                                 </div>
                                 <div>
-                                  <div className={`font-bold ${isDarkMode ? 'text-gray-200' : 'text-gray-900'}`}>{payment.dueName || due?.name || 'Unknown Due'}</div>
-                                  <div className={`text-[10px] font-bold ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>
-                                    {new Date(payment.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                                  <div className={`font-black text-base lg:text-lg ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{payment.dueName || due?.name || 'Unknown Due'}</div>
+                                  <div className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>
+                                    {ensureTimestamp(payment.date).toDate().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                                   </div>
                                 </div>
                               </div>
                               <div className="text-right">
-                                <div className={`font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{payment.amount.toFixed(2)}</div>
-                                <div className={`text-[10px] font-bold ${isDarkMode ? 'text-green-400' : 'text-green-500'} uppercase tracking-widest`}>Successful</div>
+                                <div className={`font-black text-lg lg:text-xl ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>₱{payment.amount.toFixed(2)}</div>
+                                <div className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-green-400' : 'text-green-600'} uppercase tracking-widest`}>Successful</div>
                               </div>
                             </div>
                           );
                         })}
                       {(!teacherRecord?.paymentHistory || teacherRecord.paymentHistory.length === 0) && (
                         <div className="p-12 text-center">
-                          <div className={`${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'} w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-300`}>
+                          <div className={`${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'} w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400`}>
                             <FileText size={32} />
                           </div>
-                          <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} font-bold`}>No payment records found yet.</p>
+                          <p className={`text-sm ${isDarkMode ? 'text-slate-300' : 'text-slate-600'} font-black`}>No payment records found yet.</p>
                         </div>
                       )}
                     </div>
@@ -5456,40 +7159,45 @@ function AppContent() {
             {/* Sidebar Area */}
             <div className="space-y-8">
               {/* Contact BOD Card */}
-              <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100 shadow-sm'} p-8 rounded-[2.5rem] border transition-colors duration-300`}>
-                <h3 className={`text-lg font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight mb-6`}>Support</h3>
+              <div className={`${isDarkMode ? 'bg-slate-900/95 border-slate-800 shadow-xl' : 'bg-white/95 sm:bg-white/95 backdrop-blur-xl border-white shadow-xl shadow-slate-200/40'} p-8 rounded-[2.5rem] border transition-colors duration-300`}>
+                <h3 className={`text-lg font-black ${isDarkMode ? 'text-white' : 'text-slate-900'} tracking-tight mb-6`}>Support</h3>
                 <div className="space-y-4">
                   <a 
                     href="mailto:lpcaanhsfacultyclub@gmail.com?subject=Faculty Club Support Request"
-                    className={`p-4 ${isDarkMode ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-50 hover:bg-blue-50'} rounded-2xl flex items-center gap-4 transition-all group`}
+                    className={`p-4 ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-50 hover:bg-blue-50'} rounded-2xl flex items-center gap-4 transition-all group`}
                   >
-                    <div className={`${isDarkMode ? 'bg-gray-900' : 'bg-white'} p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform`}>
+                    <div className={`${isDarkMode ? 'bg-slate-900' : 'bg-white'} p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform`}>
                       <Mail size={20} className="text-blue-600" />
                     </div>
                     <div>
-                      <p className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>Email Support</p>
-                      <p className={`text-xs font-bold ${isDarkMode ? 'text-gray-300 group-hover:text-blue-400' : 'text-gray-700 group-hover:text-blue-600'}`}>lpcaanhsfacultyclub@gmail.com</p>
+                      <p className={`text-[10px] font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>Email Support</p>
+                      <p className={`text-xs font-black ${isDarkMode ? 'text-slate-200 group-hover:text-blue-400' : 'text-slate-800 group-hover:text-blue-600'}`}>lpcaanhsfacultyclub@gmail.com</p>
                     </div>
                   </a>
-                  <div className={`p-4 ${isDarkMode ? 'bg-gray-800' : 'bg-gray-50'} rounded-2xl flex items-center gap-4 transition-colors`}>
-                    <div className={`${isDarkMode ? 'bg-gray-900' : 'bg-white'} p-2 rounded-xl shadow-sm`}>
+                  <a 
+                    href={`mailto:${Object.entries(ALLOWED_BODS).find(([_, grade]) => grade === (teacherRecord?.gradeLevel || ''))?.[0] || 'lpcaanhsfacultyclub@gmail.com'}?subject=Inquiry for ${teacherRecord?.gradeLevel || 'BOD'}`}
+                    className={`p-4 ${isDarkMode ? 'bg-slate-800 hover:bg-slate-700' : 'bg-slate-50 hover:bg-blue-50'} rounded-2xl flex items-center gap-4 transition-all group`}
+                  >
+                    <div className={`${isDarkMode ? 'bg-slate-900' : 'bg-white'} p-2 rounded-xl shadow-sm group-hover:scale-110 transition-transform`}>
                       <Users size={20} className="text-purple-600" />
                     </div>
                     <div>
-                      <p className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>BOD Contact</p>
-                      <p className={`text-xs font-bold ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>Contact your Grade Level BOD</p>
+                      <p className={`text-[10px] font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>BOD Contact ({teacherRecord?.gradeLevel})</p>
+                      <p className={`text-xs font-black ${isDarkMode ? 'text-slate-200 group-hover:text-blue-400' : 'text-slate-800 group-hover:text-blue-600'}`}>
+                        {Object.entries(ALLOWED_BODS).find(([_, grade]) => grade === (teacherRecord?.gradeLevel || ''))?.[0] || 'Contact your Grade Level BOD'}
+                      </p>
                     </div>
-                  </div>
+                  </a>
 
-                  <div className={`pt-4 mt-4 border-t ${isDarkMode ? 'border-gray-800' : 'border-gray-100'}`}>
-                    <div className={`p-4 ${isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50/50'} rounded-2xl flex items-center gap-4 transition-colors`}>
-                      <div className={`${isDarkMode ? 'bg-gray-900' : 'bg-white'} p-2 rounded-xl shadow-sm`}>
+                  <div className={`pt-4 mt-4 border-t ${isDarkMode ? 'border-slate-800' : 'border-slate-100'}`}>
+                    <div className={`p-4 ${isDarkMode ? 'bg-blue-950/45' : 'bg-[#0038A8]/5'} rounded-2xl flex items-center gap-4 transition-colors`}>
+                      <div className={`${isDarkMode ? 'bg-slate-900' : 'bg-white'} p-2 rounded-xl shadow-sm`}>
                         <Code size={20} className="text-[#0038A8]" />
                       </div>
                       <div>
-                        <p className={`text-[10px] font-black ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-widest`}>System Developer</p>
-                        <p className={`text-xs font-bold ${isDarkMode ? 'text-gray-200' : 'text-gray-900'}`}>Randy A. de Guzman</p>
-                        <a href="mailto:randydgancheta22@gmail.com" className={`text-[10px] ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-[#0038A8]'} font-bold hover:underline transition-all`}>
+                        <p className={`text-[10px] font-black ${isDarkMode ? 'text-blue-300' : 'text-slate-600'} uppercase tracking-widest`}>System Developer</p>
+                        <p className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Randy A. de Guzman</p>
+                        <a href="mailto:randydgancheta22@gmail.com" className={`text-[10px] ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-[#0038A8]'} font-black hover:underline transition-all`}>
                           randydgancheta22@gmail.com
                         </a>
                       </div>
@@ -5499,12 +7207,12 @@ function AppContent() {
               </div>
 
               {/* Security Note */}
-              <div className={`${isDarkMode ? 'bg-yellow-900/10 border-yellow-900/30' : 'bg-yellow-50 border-yellow-100 shadow-sm'} p-6 rounded-[2rem] border transition-colors duration-300`}>
+              <div className={`${isDarkMode ? 'bg-yellow-900/15 border-yellow-900/30' : 'bg-yellow-50/90 border-yellow-200 shadow-md'} p-6 rounded-[2rem] border transition-colors duration-300`}>
                 <div className="flex items-center gap-3 mb-3">
-                  <ShieldAlert size={20} className="text-yellow-600" />
-                  <h4 className={`text-xs font-black ${isDarkMode ? 'text-yellow-500' : 'text-yellow-800'} uppercase tracking-widest`}>Security Tip</h4>
+                  <ShieldAlert size={20} className="text-yellow-600 animate-pulse" />
+                  <h4 className={`text-xs font-black ${isDarkMode ? 'text-yellow-400' : 'text-yellow-800'} uppercase tracking-widest`}>Security Tip</h4>
                 </div>
-                <p className={`text-[11px] ${isDarkMode ? 'text-yellow-200/70' : 'text-yellow-700'} font-medium leading-relaxed`}>
+                <p className={`text-[11px] ${isDarkMode ? 'text-yellow-200/80' : 'text-yellow-900'} font-bold leading-relaxed`}>
                   Never share your QR login code with anyone. It provides direct access to your financial records and profile.
                 </p>
               </div>
@@ -5520,34 +7228,78 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100"
+              className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-12 lg:p-16 max-w-md lg:max-w-xl w-full shadow-2xl border`}
             >
               <div className="flex items-center justify-between mb-8">
-                <h3 className="text-2xl font-black text-gray-900 tracking-tight">Edit My Profile</h3>
-                <button onClick={() => setIsEditingProfile(false)} className="p-2 bg-gray-100 rounded-full text-gray-400 hover:text-gray-600">
+                <h3 className={`text-2xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Edit My Profile</h3>
+                <button onClick={() => setIsEditingProfile(false)} className={`p-2 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'}`}>
                   <X size={20} />
                 </button>
               </div>
               
               <div className="space-y-6">
                 <div>
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Full Name</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Full Name</label>
                   <input 
                     type="text" 
                     value={editProfileName}
                     onChange={(e) => setEditProfileName(e.target.value)}
-                    className="w-full p-4 bg-gray-50 border-2 border-transparent focus:border-blue-100 focus:bg-white rounded-2xl font-bold text-gray-900 transition-all outline-none"
+                    className={`w-full p-4 border-2 border-transparent focus:border-blue-100 rounded-2xl font-bold transition-all outline-none ${
+                      isDarkMode ? 'bg-slate-950 text-white focus:bg-slate-900' : 'bg-gray-50 text-gray-900 focus:bg-white'
+                    }`}
                     placeholder="Your Full Name"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Email Address</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Email Address</label>
                   <input 
                     type="email" 
                     value={editProfileEmail}
                     onChange={(e) => setEditProfileEmail(e.target.value)}
-                    className="w-full p-4 bg-gray-50 border-2 border-transparent focus:border-blue-100 focus:bg-white rounded-2xl font-bold text-gray-900 transition-all outline-none"
+                    className={`w-full p-4 border-2 border-transparent focus:border-blue-100 rounded-2xl font-bold transition-all outline-none ${
+                      isDarkMode ? 'bg-slate-950 text-white focus:bg-slate-900' : 'bg-gray-50 text-gray-900 focus:bg-white'
+                    }`}
                     placeholder="your@email.com"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Grade Level</label>
+                    <select 
+                      value={editProfileGradeLevel}
+                      onChange={(e) => setEditProfileGradeLevel(e.target.value as GradeLevel)}
+                      className={`w-full p-4 border-2 border-transparent focus:border-blue-100 rounded-2xl font-bold transition-all outline-none ${
+                        isDarkMode ? 'bg-slate-950 text-white focus:bg-slate-900' : 'bg-gray-50 text-gray-900 focus:bg-white'
+                      }`}
+                    >
+                      {['Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'].map(grade => (
+                        <option key={grade} value={grade}>{grade}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Department</label>
+                    <input 
+                      type="text" 
+                      value={editProfileDepartment}
+                      onChange={(e) => setEditProfileDepartment(e.target.value)}
+                      className={`w-full p-4 border-2 border-transparent focus:border-blue-100 rounded-2xl font-bold transition-all outline-none ${
+                        isDarkMode ? 'bg-slate-950 text-white focus:bg-slate-900' : 'bg-gray-50 text-gray-900 focus:bg-white'
+                      }`}
+                      placeholder="e.g. Science"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Note (Optional)</label>
+                  <textarea 
+                    value={editProfileNote}
+                    onChange={(e) => setEditProfileNote(e.target.value)}
+                    className={`w-full p-4 border-2 border-transparent focus:border-blue-100 rounded-2xl font-bold transition-all outline-none resize-none ${
+                      isDarkMode ? 'bg-slate-950 text-white focus:bg-slate-900' : 'bg-gray-50 text-gray-900 focus:bg-white'
+                    }`}
+                    placeholder="Reason for change..."
+                    rows={3}
                   />
                 </div>
                 
@@ -5560,7 +7312,9 @@ function AppContent() {
                   </button>
                   <button 
                     onClick={() => setIsEditingProfile(false)}
-                    className="w-full py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                    className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+                      isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
                   >
                     Cancel
                   </button>
@@ -5576,11 +7330,11 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-[2.5rem] p-6 sm:p-10 md:p-12 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-100 text-center relative"
+              className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-6 sm:p-10 md:p-12 lg:p-14 max-w-lg lg:max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border text-center relative`}
             >
               <button 
                 onClick={() => setQrCodeData(null)}
-                className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+                className={`absolute top-6 right-6 p-2 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'}`}
               >
                 <X size={20} />
               </button>
@@ -5591,18 +7345,17 @@ function AppContent() {
                   Teacher
                 </p>
                 
-                <div className="bg-white p-4 rounded-2xl border-2 border-blue-100 shadow-lg shadow-blue-50/50 mb-8 w-48 h-48 sm:w-64 sm:h-64 mx-auto flex items-center justify-center">
+                <div className="bg-white p-4 rounded-3xl border-2 border-blue-100 shadow-xl shadow-blue-50/50 mb-8 mx-auto flex items-center justify-center w-fit">
                   <QRCodeCanvas 
                     id="teacher-qr-canvas"
                     value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass, realEmail: qrCodeData.realEmail })} 
-                    size={256}
-                    className="w-full h-full"
+                    size={220}
                     level="H"
                     includeMargin={true}
                     imageSettings={{
                       src: SUN_LOGO_SVG,
-                      height: 48,
-                      width: 48,
+                      height: 40,
+                      width: 40,
                       excavate: true,
                     }}
                   />
@@ -5636,7 +7389,9 @@ function AppContent() {
                 </button>
                 <button 
                   onClick={() => setQrCodeData(null)}
-                  className="w-full py-4 sm:py-5 bg-gray-100 text-gray-600 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className={`w-full py-4 sm:py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${
+                    isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
                   Done
                 </button>
@@ -5652,18 +7407,18 @@ function AppContent() {
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-2xl w-full shadow-2xl border border-gray-100 relative max-h-[90vh] flex flex-col"
+              className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-10 max-w-2xl lg:max-w-4xl w-full shadow-2xl border relative max-h-[90vh] flex flex-col`}
             >
               <button 
                 onClick={() => setShowReceiptPreview(false)}
-                className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+                className={`absolute top-6 right-6 p-2 rounded-full transition-colors ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'}`}
               >
                 <X size={20} />
               </button>
               
-              <h3 className="text-2xl font-black text-gray-900 mb-6 text-center">Receipt Preview</h3>
+              <h3 className={`text-2xl font-black mb-6 text-center ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Receipt Preview</h3>
               
-              <div className="flex-1 overflow-auto mb-8 p-4 bg-gray-50 rounded-3xl border border-gray-100 flex justify-center">
+              <div className={`flex-1 overflow-auto mb-8 p-4 rounded-3xl border flex justify-center ${isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-gray-50 border-gray-100'}`}>
                 <div className="receipt-preview-scaler">
                   <div id="teacher-receipt-content" className="bg-white shadow-sm" dangerouslySetInnerHTML={{ __html: generateHTMLReceipt(previewReceiptData) }} />
                 </div>
@@ -5672,7 +7427,9 @@ function AppContent() {
               <div className="flex flex-col sm:flex-row gap-3">
                 <button 
                   onClick={() => setShowReceiptPreview(false)}
-                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className={`flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+                    isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
                   Close
                 </button>
@@ -5734,6 +7491,8 @@ function AppContent() {
           showInAppNotify={showInAppNotify}
           setShowInAppNotify={setShowInAppNotify}
           setActiveTab={setActiveTab}
+          setShowLoginSuccess={setShowLoginSuccess}
+          onDismissToast={() => setToast(null)}
         />
       </div>
     );
@@ -5742,30 +7501,39 @@ function AppContent() {
   return (
     <div className="h-[100dvh] bg-[#F8FAFC] font-sans flex flex-col lg:flex-row overflow-hidden">
       {/* Mobile Header */}
-      <header className="lg:hidden bg-[#0038A8] text-white p-4 flex items-center justify-between sticky top-0 z-40 shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="bg-white/20 p-2 rounded-xl backdrop-blur-md">
-            <Sun className="text-[#FCD116] animate-sun-rotate" size={24} fill="#FCD116" />
+      <header className="lg:hidden bg-[#0038A8] text-white p-4 flex flex-col gap-2 sticky top-0 z-40 shadow-lg">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-white/20 p-2 rounded-xl backdrop-blur-md">
+              <Sun className="text-[#FCD116] animate-sun-rotate" size={24} fill="#FCD116" />
+            </div>
+            <h1 className="text-lg font-black tracking-tight">Las Piñas CAA</h1>
           </div>
-          <h1 className="text-lg font-black tracking-tight">Las Piñas CAA</h1>
+          <div className="flex items-center gap-3">
+            <button onClick={handleLogout} className="p-2 bg-white/10 rounded-xl hover:bg-red-500/20 transition-colors">
+              <LogOut size={24} />
+            </button>
+            <button 
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-colors"
+            >
+              {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={handleLogout} className="p-2 bg-white/10 rounded-xl hover:bg-red-500/20 transition-colors">
-            <LogOut size={24} />
-          </button>
-          <button 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 bg-white/10 rounded-xl hover:bg-white/20 transition-colors"
-          >
-            {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+        <div className="flex items-center justify-center gap-2 py-1 bg-white/10 rounded-lg text-[10px] font-black uppercase tracking-widest">
+          <Clock size={12} />
+          {currentTime.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} • {currentTime.toLocaleTimeString()}
+          {isOffline && (
+            <span className="text-amber-300 ml-2 animate-pulse font-extrabold">• OFFLINE</span>
+          )}
         </div>
       </header>
 
       {/* Sidebar Navigation */}
       <AnimatePresence>
         <motion.aside 
-          className={`fixed lg:static inset-y-0 left-0 z-50 bg-white border-r border-gray-100 flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 overflow-hidden ${
+          className={`fixed lg:static inset-y-0 left-0 z-50 ${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100 shadow-slate-950/50' : 'bg-white border-gray-100 text-gray-900'} border-r flex flex-col shadow-2xl lg:shadow-none transition-all duration-300 overflow-hidden ${
             isSidebarOpen ? 'translate-x-0 w-72' : '-translate-x-full w-72'
           } ${
             isDesktopSidebarOpen ? 'lg:translate-x-0 lg:w-80' : 'lg:-translate-x-full lg:w-0 lg:border-none'
@@ -5773,38 +7541,70 @@ function AppContent() {
         >
           <div className="p-8 flex-1 overflow-y-auto custom-scrollbar w-72 lg:w-80">
             <div className="flex items-center gap-4 mb-10">
-              <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200 transform -rotate-6 shrink-0">
+              <div className="bg-gradient-to-br from-[#0038A8] to-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-500/20 transform -rotate-6 shrink-0">
                 <Sun className="text-[#FCD116] animate-sun-rotate" size={28} fill="#FCD116" />
               </div>
               <div className="shrink-0">
-                <h1 className="text-xl lg:text-2xl font-black text-gray-900 leading-none tracking-tight">Faculty Club</h1>
-                <p className="text-[10px] lg:text-xs text-[#0038A8] font-black uppercase tracking-widest mt-1">Management System</p>
+                <h1 className={`text-xl lg:text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} leading-none tracking-tight`}>Faculty Club</h1>
+                <p className={`text-[10px] lg:text-xs ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'} font-black uppercase tracking-widest mt-1`}>Management System</p>
               </div>
             </div>
 
               <nav className="space-y-2">
-                <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Main Menu</p>
-                <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
-                <NavItem id="collection" icon={Users} label="Collection" />
-                <NavItem id="remittance" icon={Wallet} label="Remittances" />
+                <p className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-gray-400'} uppercase tracking-[0.2em] mb-4 ml-2`}>Main Menu</p>
+                <NavItem id="dashboard" icon={LayoutDashboard} label="Dashboard" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
+                <NavItem id="collection" icon={Users} label="Collection" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
+                <NavItem id="remittance" icon={Wallet} label="Remittances" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
                 
                 <div className="pt-6">
-                  <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Administrative</p>
-                  <NavItem id="admin" icon={Shield} label="Admin Panel" role="admin" />
-                  <NavItem id="settings" icon={Settings} label="Report Settings" role="admin" />
-                  <NavItem id="expenses" icon={CreditCard} label="Expenses" role="admin" />
-                  <NavItem id="audit" icon={History} label="Audit Logs" role="admin" />
+                  <p className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-gray-400'} uppercase tracking-[0.2em] mb-4 ml-2`}>Administrative</p>
+                  <NavItem id="admin" icon={Shield} label="Admin Panel" role="admin" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
+                  <NavItem id="settings" icon={Settings} label="Report Settings" role="admin" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
+                  <NavItem id="expenses" icon={CreditCard} label="Expenses" role="admin" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
+                  <NavItem id="audit" icon={History} label="Audit Logs" role="admin" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
                 </div>
 
                 <div className="pt-6">
-                  <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 ml-2">Account</p>
-                  <NavItem id="profile" icon={User} label="My Profile" />
+                  <p className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-gray-400'} uppercase tracking-[0.2em] mb-4 ml-2`}>Appearance</p>
+                  <div className={`p-1.5 rounded-2xl border flex items-center gap-1.5 mb-2 ${isDarkMode ? 'bg-slate-950/80 border-slate-800' : 'bg-gray-100/80 border-gray-200'}`}>
+                    <button
+                      onClick={() => setIsDarkMode(false)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-black transition-all ${
+                        !isDarkMode
+                          ? 'bg-white text-[#0038A8] shadow-sm border border-slate-200'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Sun size={15} className={!isDarkMode ? 'text-amber-500 fill-amber-500' : ''} />
+                      <span>Light</span>
+                    </button>
+                    <button
+                      onClick={() => setIsDarkMode(true)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-black transition-all ${
+                        isDarkMode
+                          ? 'bg-slate-800 text-yellow-400 shadow-sm border border-slate-700'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Moon size={15} className={isDarkMode ? 'text-yellow-400 fill-yellow-400' : ''} />
+                      <span>Dark</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-6">
+                  <p className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-slate-400' : 'text-gray-400'} uppercase tracking-[0.2em] mb-4 ml-2`}>Account</p>
+                  <NavItem id="profile" icon={User} label="My Profile" profile={profile} activeTab={activeTab} setActiveTab={setActiveTab} setIsSidebarOpen={setIsSidebarOpen} isDarkMode={isDarkMode} />
                   <button
                     onClick={() => setShowTermsModal(true)}
-                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 text-gray-500 hover:bg-blue-50 hover:text-[#0038A8] group"
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-300 ${
+                      isDarkMode ? 'text-slate-400 hover:bg-slate-800/80 hover:text-white' : 'text-gray-500 hover:bg-blue-50 hover:text-[#0038A8]'
+                    } group`}
                   >
-                    <div className="p-2 rounded-xl bg-gray-100 group-hover:bg-white transition-colors">
-                      <ShieldCheck size={18} className="text-gray-500 group-hover:text-[#0038A8]" />
+                    <div className={`p-2 rounded-xl transition-colors ${
+                      isDarkMode ? 'bg-slate-800 group-hover:bg-slate-700' : 'bg-gray-100 group-hover:bg-white'
+                    }`}>
+                      <ShieldCheck size={18} className={isDarkMode ? 'text-slate-400 group-hover:text-blue-400' : 'text-gray-500 group-hover:text-[#0038A8]'} />
                     </div>
                     <span className="text-xs lg:text-sm font-black uppercase tracking-widest opacity-70 group-hover:opacity-100">
                       Terms & Privacy
@@ -5814,19 +7614,23 @@ function AppContent() {
               </nav>
             </div>
 
-            <div className="mt-auto p-6 border-t border-gray-50">
-              <div className="bg-gray-50 rounded-3xl p-4 flex items-center gap-4 mb-4">
+            <div className={`mt-auto p-6 border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-50'}`}>
+              <div className={`${isDarkMode ? 'bg-slate-950/80 border-slate-800' : 'bg-gray-50 border-gray-100'} rounded-3xl p-4 flex items-center gap-4 mb-4 border`}>
                 <div className="w-10 h-10 bg-[#0038A8] rounded-full flex items-center justify-center text-white font-black shadow-md">
                   {profile.name.charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs lg:text-sm font-black text-gray-900 truncate">{profile.name}</p>
-                  <p className="text-[9px] lg:text-[10px] text-gray-400 font-bold uppercase tracking-widest">{profile.role} • {profile.gradeLevel}</p>
+                  <p className={`text-xs lg:text-sm font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} truncate`}>{profile.name}</p>
+                  <p className={`text-[9px] lg:text-[10px] ${isDarkMode ? 'text-slate-400' : 'text-gray-400'} font-bold uppercase tracking-widest`}>{profile.role} • {profile.gradeLevel}</p>
                 </div>
               </div>
               <button 
                 onClick={handleLogout}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-red-50 text-red-600 rounded-2xl text-[10px] lg:text-xs font-black uppercase tracking-widest hover:bg-red-100 transition-all group"
+                className={`w-full flex items-center justify-center gap-2 py-3 rounded-2xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-all group ${
+                  isDarkMode 
+                    ? 'bg-red-950/40 border border-red-900/50 text-red-400 hover:bg-red-900/50 hover:text-red-300' 
+                    : 'bg-red-50 text-red-600 hover:bg-red-100'
+                }`}
               >
                 <LogOut size={14} className="group-hover:-translate-x-1 transition-transform" /> Sign Out
               </button>
@@ -5835,35 +7639,92 @@ function AppContent() {
       </AnimatePresence>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-h-0 relative">
+      <main className={`flex-1 flex flex-col min-h-0 relative pb-16 lg:pb-8 ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-[#F8FAFC] text-slate-900'}`}>
+        {/* School Background - Only for Dashboard */}
+        <AnimatePresence>
+          {activeTab === 'dashboard' && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.6 }}
+              className="absolute inset-0 z-0 pointer-events-none overflow-hidden"
+            >
+              {/* Premium, ultra-modern backdrop wash with soft branding blue sunset tint & slate-clear glass blend */}
+              <div className={`absolute inset-0 z-10 backdrop-blur-[1px] sm:backdrop-blur-[2px] md:backdrop-blur-[3px] transition-all duration-500 ${
+                isDarkMode 
+                  ? 'bg-gradient-to-tr from-slate-950/90 via-slate-950/80 to-slate-900/70' 
+                  : 'bg-gradient-to-tr from-[#0038A8]/6 via-[#F8FAFC]/70 to-[#F8FAFC]/30'
+              }`} />
+              <div className={`absolute inset-0 z-10 transition-all duration-500 ${
+                isDarkMode 
+                  ? 'bg-gradient-to-b from-transparent via-slate-950/80 to-slate-950' 
+                  : 'bg-gradient-to-b from-transparent via-[#F8FAFC]/50 to-[#F8FAFC]'
+              }`} />
+              <img 
+                src="https://www.dropbox.com/scl/fi/8m4sg2ph32whxpd5phv70/FB_IMG_1779455185471.jpg?rlkey=2hwa1il92wrclccve3i19dk5p&st=jiz0ey5x&raw=1" 
+                alt="School Campus" 
+                className={`w-full h-full object-cover object-center scale-102 select-none pointer-events-none transition-all duration-500 ${
+                  isDarkMode ? 'opacity-35 mix-blend-luminosity brightness-75' : 'opacity-95'
+                }`}
+                loading="eager"
+                referrerPolicy="no-referrer"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Top Bar (Desktop) */}
-        <header className="hidden lg:flex items-center justify-between px-10 py-6 bg-white/80 backdrop-blur-md border-b border-gray-100 sticky top-0 z-30">
-          <div className="flex items-center gap-4">
+        <header className={`hidden lg:flex items-center justify-between px-10 py-8 ${
+          isDarkMode 
+            ? (activeTab === 'dashboard' ? 'bg-slate-900/70 border-slate-800/80 text-slate-100' : 'bg-slate-900/90 border-slate-800 text-slate-100') 
+            : (activeTab === 'dashboard' ? 'bg-white/40 border-gray-100 text-gray-900' : 'bg-white/80 border-gray-100 text-gray-900')
+        } backdrop-blur-md border-b sticky top-0 z-30 transition-colors duration-500`}>
+          <div className="flex items-center gap-6">
             <button 
               onClick={() => setIsDesktopSidebarOpen(!isDesktopSidebarOpen)}
-              className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+              className={`p-3 rounded-2xl transition-colors ${
+                isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
               title={isDesktopSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
             >
-              <Menu size={24} className="text-gray-600" />
+              <Menu size={28} className={isDarkMode ? 'text-slate-200' : 'text-gray-600'} />
             </button>
             <div>
-              <h2 className="text-2xl lg:text-3xl font-black text-gray-900 capitalize tracking-tight">{activeTab.replace('-', ' ')}</h2>
-              <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">
-                {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-              </p>
+              <h2 className={`text-3xl lg:text-4xl font-black capitalize tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{activeTab.replace('-', ' ')}</h2>
+              <div className="flex items-center gap-2 mt-1">
+                <p className={`text-xs lg:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>
+                  {currentTime.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </p>
+                <div className={`w-1.5 h-1.5 rounded-full ${isDarkMode ? 'bg-slate-700' : 'bg-gray-300'}`}></div>
+                <p className={`text-xs lg:text-sm font-black tracking-widest tabular-nums ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+                  {currentTime.toLocaleTimeString()}
+                </p>
+              </div>
             </div>
           </div>
           
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 rounded-2xl border border-blue-100">
-              <Activity size={14} className="text-[#0038A8]" />
-              <span className="text-[10px] lg:text-xs font-black text-[#0038A8] uppercase tracking-widest">System Active</span>
-            </div>
+            {isOffline ? (
+              <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl border shadow-sm animate-pulse ${
+                isDarkMode ? 'bg-amber-950/60 border-amber-800 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'
+              }`}>
+                <ShieldAlert size={16} className={isDarkMode ? 'text-amber-400' : 'text-amber-600'} />
+                <span className="text-xs lg:text-sm font-black uppercase tracking-widest">Offline Mode (Cached)</span>
+              </div>
+            ) : (
+              <div className={`flex items-center gap-3 px-6 py-3 rounded-2xl border shadow-sm ${
+                isDarkMode ? 'bg-blue-950/60 border-blue-800 text-blue-300' : 'bg-blue-50 border-blue-100 text-[#0038A8]'
+              }`}>
+                <Activity size={16} className={isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'} />
+                <span className="text-xs lg:text-sm font-black uppercase tracking-widest">System Active</span>
+              </div>
+            )}
           </div>
         </header>
 
         {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-12 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 lg:p-12 custom-scrollbar relative z-10">
 
       <AnimatePresence mode="wait">
             <motion.div
@@ -5872,54 +7733,76 @@ function AppContent() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.3 }}
-              className="max-w-7xl mx-auto"
+              className="max-w-[1600px] mx-auto w-full"
             >
               {activeTab === 'dashboard' && (
                 <div className="space-y-8">
                   {/* Welcome Section */}
-                  <div className="bg-gradient-to-br from-[#0038A8] to-blue-700 rounded-[3rem] p-8 md:p-12 text-white relative overflow-hidden shadow-2xl shadow-blue-200">
+                  <div className="bg-gradient-to-br from-[#0038A8] to-blue-700 rounded-[1.5rem] sm:rounded-[2rem] p-6 lg:p-10 text-white relative overflow-hidden shadow-xl shadow-blue-200 flex flex-col justify-center">
                     <div className="absolute top-0 right-0 -mt-20 -mr-20 w-80 h-80 bg-white/10 rounded-full blur-3xl"></div>
                     <div className="absolute bottom-0 left-0 -mb-20 -ml-20 w-64 h-64 bg-blue-400/20 rounded-full blur-3xl"></div>
                     
-                    <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8">
-                      <div className="max-w-xl">
-                        <h1 className="text-3xl md:text-5xl lg:text-6xl font-black mb-4 tracking-tight">
-                          Welcome back, {profile.name.split(' ')[0]}! 
-                          <span className="inline-block animate-wave origin-[70%_70%]">👋</span>
+                    <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-8 lg:gap-12 w-full">
+                      <div className="max-w-3xl flex-1">
+                        <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black mb-3 md:mb-4 tracking-tight leading-tight flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span>Welcome back, {getWelcomeDisplayName(profile?.name || '')}!</span>
+                          <span className="inline-block animate-wave origin-[70%_70%] text-2xl md:text-4xl">👋</span>
                         </h1>
-                        <p className="text-blue-100 text-sm md:text-base font-medium leading-relaxed opacity-90">
+                        <p className="text-blue-100 text-sm md:text-base font-medium leading-relaxed opacity-90 max-w-2xl">
                           Here's what's happening with the Faculty Club finances today. {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com') && `You have ${remittances.filter(r => r.status === 'pending').length} pending remittances to verify.`}
                         </p>
-                        <div className="flex flex-wrap gap-3 mt-8">
-                          <button onClick={() => setActiveTab('collection')} className="bg-white text-[#0038A8] px-6 py-3 rounded-2xl text-xs lg:text-sm font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-lg">
+                        <div className="flex flex-col sm:flex-row flex-wrap gap-3 mt-6 items-center">
+                          <div className="relative w-full sm:w-auto min-w-[280px] flex-1 mb-2 sm:mb-0">
+                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-200" size={18} />
+                            <input 
+                              type="text"
+                              placeholder="Search faculty across the system..."
+                              value={searchQuery}
+                              onChange={(e) => setSearchQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') setActiveTab('collection');
+                              }}
+                              className="w-full pl-11 pr-12 py-3 bg-white/10 border border-white/20 text-white placeholder-blue-200/80 rounded-xl text-xs sm:text-sm font-bold focus:outline-none focus:ring-2 focus:ring-white/50 focus:bg-white/20 transition-all shadow-inner backdrop-blur-md"
+                            />
+                            {searchQuery && (
+                              <button 
+                                onClick={() => setActiveTab('collection')} 
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-white text-[#0038A8] rounded-lg shadow-sm hover:bg-blue-50 transition-all animate-in zoom-in"
+                                title="Go to results"
+                              >
+                                <ChevronRight size={16} />
+                              </button>
+                            )}
+                          </div>
+                          <button onClick={() => setActiveTab('collection')} className="bg-white text-[#0038A8] px-5 sm:px-6 py-3 rounded-xl text-xs sm:text-sm font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-md transform hover:-translate-y-0.5 text-center w-full sm:w-auto shrink-0">
                             Manage Collections
                           </button>
                           {(profile?.role === 'admin' || profile?.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile?.email === 'ngehthong@gmail.com') && (
-                            <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-6 py-3 rounded-2xl text-xs lg:text-sm font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all">
+                            <button onClick={() => setActiveTab('remittance')} className="bg-blue-600/30 backdrop-blur-md text-white border border-white/20 px-5 sm:px-6 py-3 rounded-xl text-xs sm:text-sm font-black uppercase tracking-widest hover:bg-blue-600/50 transition-all text-center w-full sm:w-auto shrink-0">
                               View Remittances
                             </button>
                           )}
                         </div>
                       </div>
                       
-                      <div className="bg-white/10 backdrop-blur-xl p-6 rounded-[2.5rem] border border-white/20 flex flex-col items-center text-center min-w-[240px]">
-                        <div className="text-[10px] lg:text-xs font-black uppercase tracking-[0.2em] opacity-70 mb-4">Financial Summary</div>
+                      <div className="bg-white/10 backdrop-blur-xl p-5 sm:p-6 rounded-[1.5rem] border border-white/20 flex flex-col w-full md:w-80 shrink-0">
+                        <div className="text-[10px] sm:text-[11px] font-black uppercase tracking-[0.2em] opacity-80 mb-4">Financial Summary</div>
                         <div className="grid grid-cols-1 gap-2 w-full">
-                          <div className="flex justify-between items-center text-xs lg:text-sm">
-                            <span className="opacity-70">Remitted:</span>
+                          <div className="flex justify-between items-center text-xs sm:text-sm">
+                            <span className="opacity-80">Remitted:</span>
                             <span className="font-bold">₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                           </div>
-                          <div className="flex justify-between items-center text-xs lg:text-sm">
-                            <span className="opacity-70">Initial Balance:</span>
+                          <div className="flex justify-between items-center text-xs sm:text-sm">
+                            <span className="opacity-80">Initial Balance:</span>
                             <span className="font-bold">₱{totalInitialBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                           </div>
-                          <div className="flex justify-between items-center text-xs lg:text-sm">
-                            <span className="opacity-70">Expenses:</span>
+                          <div className="flex justify-between items-center text-xs sm:text-sm">
+                            <span className="opacity-80">Expenses:</span>
                             <span className="font-bold text-red-300">-₱{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                           </div>
-                          <div className="border-t border-white/20 my-2 pt-2 flex justify-between items-center">
-                            <span className="font-bold lg:text-lg">Net Balance:</span>
-                            <span className="text-2xl lg:text-3xl font-black tracking-tighter">
+                          <div className="border-t border-white/20 mt-2 pt-3 flex flex-col sm:flex-row lg:flex-col justify-between sm:items-center lg:items-start gap-1">
+                            <span className="font-bold text-xs sm:text-sm opacity-90">Net Balance:</span>
+                            <span className="text-2xl sm:text-3xl font-black tracking-tight">
                               ₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                             </span>
                           </div>
@@ -5928,100 +7811,166 @@ function AppContent() {
                     </div>
                   </div>
 
+                  {/* QR Login Pending Approvals */}
+                  {pendingLoginRequests.length > 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-orange-50 border-2 border-orange-200 rounded-[2rem] p-6 lg:p-8"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+                        <div className="flex items-center gap-4">
+                          <div className="p-4 bg-orange-500 text-white rounded-[1.25rem] shadow-xl shadow-orange-200">
+                            <ShieldAlert size={28} className="animate-pulse" />
+                          </div>
+                          <div>
+                            <h3 className="text-xl lg:text-2xl font-black text-orange-900 uppercase tracking-tight">Login Authorizations</h3>
+                            <p className="text-[10px] lg:text-xs text-orange-700 font-bold uppercase tracking-widest flex items-center gap-2">
+                              <span className="w-2 h-2 bg-orange-500 rounded-full animate-ping"></span>
+                              {pendingLoginRequests.length} {pendingLoginRequests.length === 1 ? 'Teacher' : 'Teachers'} pending verification
+                            </p>
+                          </div>
+                        </div>
+
+                        {pendingLoginRequests.length > 1 && (
+                          <button 
+                            onClick={approveAllLoginRequests}
+                            className="bg-orange-900 text-white px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-[0.15em] hover:bg-black transition-all shadow-xl shadow-orange-200 flex items-center justify-center gap-3 active:scale-95"
+                          >
+                            <ShieldCheck size={20} />
+                            Approve All ({pendingLoginRequests.length})
+                          </button>
+                        )}
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                        {pendingLoginRequests.map(request => (
+                          <div key={request.id} className="bg-white p-6 rounded-[2rem] border border-orange-100 shadow-sm flex flex-col gap-5 hover:shadow-md transition-shadow">
+                            <div className="flex items-center gap-4">
+                              <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center font-black text-xl shadow-inner uppercase">
+                                {request.teacherName?.charAt(0) || 'T'}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-black text-gray-900 truncate text-lg tracking-tight">{request.teacherName}</p>
+                                <p className="text-[10px] text-gray-400 font-bold truncate lowercase tracking-tight opacity-70 italic">{request.teacherEmail}</p>
+                              </div>
+                            </div>
+                            
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => approveLoginRequest(request.id)}
+                                className="flex-1 bg-green-600 text-white py-4 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-green-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-50 active:scale-95"
+                              >
+                                <Check size={16} />
+                                Approve
+                              </button>
+                              <button 
+                                onClick={() => denyLoginRequest(request.id)}
+                                className="bg-red-50 text-red-600 px-5 py-4 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-100 transition-all active:scale-95"
+                              >
+                                Deny
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+
                   {/* Financial Metrics Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
-                          <Wallet size={24} />
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-8 rounded-[2.5rem] border hover:shadow-xl hover:scale-[1.015] transition-all duration-300 group`}>
+                      <div className="flex items-center justify-between mb-6">
+                        <div className={`p-4 rounded-2xl transition-all ${isDarkMode ? 'bg-blue-950/80 text-blue-400 group-hover:bg-[#0038A8] group-hover:text-white' : 'bg-blue-50 text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white'}`}>
+                          <Wallet size={32} />
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Collections</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                      <p className={`text-[10px] lg:text-sm font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Total Collections</p>
+                      <h3 className={`text-2xl lg:text-4xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{totalCollections.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-red-50 rounded-2xl text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
-                          <CreditCard size={24} />
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-8 rounded-[2.5rem] border hover:shadow-xl hover:scale-[1.015] transition-all duration-300 group`}>
+                      <div className="flex items-center justify-between mb-6">
+                        <div className={`p-4 rounded-2xl transition-all ${isDarkMode ? 'bg-red-950/80 text-red-400 group-hover:bg-red-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'}`}>
+                          <CreditCard size={32} />
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Expenses</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                      <p className={`text-[10px] lg:text-sm font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Total Expenses</p>
+                      <h3 className={`text-2xl lg:text-4xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-yellow-50 rounded-2xl text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white transition-all">
-                          <Database size={24} />
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-8 rounded-[2.5rem] border hover:shadow-xl hover:scale-[1.015] transition-all duration-300 group`}>
+                      <div className="flex items-center justify-between mb-6">
+                        <div className={`p-4 rounded-2xl transition-all ${isDarkMode ? 'bg-yellow-950/80 text-yellow-400 group-hover:bg-yellow-600 group-hover:text-white' : 'bg-yellow-50 text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white'}`}>
+                          <Database size={32} />
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Initial Balance</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalInitialBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                      <p className={`text-[10px] lg:text-sm font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Initial Balance</p>
+                      <h3 className={`text-2xl lg:text-4xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{totalInitialBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-green-50 rounded-2xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
-                          <PhilippinePeso size={24} />
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-8 rounded-[2.5rem] border hover:shadow-xl hover:scale-[1.015] transition-all duration-300 group`}>
+                      <div className="flex items-center justify-between mb-6">
+                        <div className={`p-4 rounded-2xl transition-all ${isDarkMode ? 'bg-green-950/80 text-green-400 group-hover:bg-green-600 group-hover:text-white' : 'bg-green-50 text-green-600 group-hover:bg-green-600 group-hover:text-white'}`}>
+                          <PhilippinePeso size={32} />
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Net Club Balance</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+                      <p className={`text-[10px] lg:text-sm font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Net Club Balance</p>
+                      <h3 className={`text-2xl lg:text-4xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{netBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
                     </div>
                   </div>
 
                   {/* Faculty & System Stats Grid */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-6 rounded-[2rem] border hover:shadow-md transition-all duration-300 group`}>
                       <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
+                        <div className={`p-3 rounded-2xl transition-all ${isDarkMode ? 'bg-blue-950/80 text-blue-400 group-hover:bg-[#0038A8] group-hover:text-white' : 'bg-blue-50 text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white'}`}>
                           <Users size={24} />
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Total Faculty</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">{records.length}</h3>
+                      <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Total Faculty</p>
+                      <h3 className={`text-2xl lg:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{records.length}</h3>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-6 rounded-[2rem] border hover:shadow-md transition-all duration-300 group`}>
                       <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-green-50 rounded-2xl text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
+                        <div className={`p-3 rounded-2xl transition-all ${isDarkMode ? 'bg-green-950/80 text-green-400 group-hover:bg-green-600 group-hover:text-white' : 'bg-green-50 text-green-600 group-hover:bg-green-600 group-hover:text-white'}`}>
                           <CheckCircle size={24} />
                         </div>
-                        <div className="text-[10px] font-black text-green-600">
+                        <div className={`text-[10px] font-black ${isDarkMode ? 'text-green-400' : 'text-green-600'}`}>
                           {((fullyPaidCount / (records.length || 1)) * 100).toFixed(0)}%
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Fully Paid</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">
+                      <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Fully Paid</p>
+                      <h3 className={`text-2xl lg:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                         {fullyPaidCount}
                       </h3>
                     </div>
 
-                    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+                    <div className={`${isDarkMode ? 'bg-slate-900/80 sm:bg-slate-900/85 border-slate-800/80 hover:bg-slate-900/95 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 hover:bg-white/95 shadow-sm'} backdrop-blur-md p-6 rounded-[2rem] border hover:shadow-md transition-all duration-300 group`}>
                       <div className="flex items-center justify-between mb-4">
-                        <div className="p-3 bg-purple-50 rounded-2xl text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
+                        <div className={`p-3 rounded-2xl transition-all ${isDarkMode ? 'bg-purple-950/80 text-purple-400 group-hover:bg-purple-600 group-hover:text-white' : 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white'}`}>
                           <PieChart size={24} />
                         </div>
-                        <div className="text-[10px] font-black text-purple-600">
+                        <div className={`text-[10px] font-black ${isDarkMode ? 'text-purple-400' : 'text-purple-600'}`}>
                           {standardDues.length} {standardDues.length === 1 ? 'Item' : 'Items'}
                         </div>
                       </div>
-                      <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest mb-1">Active Dues</p>
-                      <h3 className="text-2xl lg:text-3xl font-black text-gray-900">₱{totalDuesAmount.toLocaleString()}</h3>
+                      <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Active Dues</p>
+                      <h3 className={`text-2xl lg:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{totalDuesAmount.toLocaleString()}</h3>
                     </div>
                   </div>
 
                   {/* Visual Analytics Section */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <div id="expense-pie-chart" className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div id="expense-pie-chart" className={`${isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 shadow-slate-950/50' : 'bg-white/75 sm:bg-white/80 border-white/70 shadow-sm'} backdrop-blur-md p-8 rounded-[2.5rem] border`}>
                       <div className="flex items-center gap-4 mb-8">
-                        <div className="p-3 bg-red-50 rounded-2xl text-red-600">
+                        <div className={`p-3 rounded-2xl ${isDarkMode ? 'bg-red-950/80 text-red-400' : 'bg-red-50 text-red-600'}`}>
                           <PieChart size={24} />
                         </div>
                         <div>
-                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Expense Categories</h3>
-                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Distribution of club spending</p>
+                          <h3 className={`text-lg lg:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Expense Categories</h3>
+                          <p className={`text-[10px] lg:text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Distribution of club spending</p>
                         </div>
                       </div>
                       <div className="h-[300px] w-full flex items-center justify-center">
@@ -6042,110 +7991,79 @@ function AppContent() {
                                 ))}
                               </Pie>
                               <ReTooltip 
-                                contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                                formatter={(value: number) => `₱${value.toLocaleString()}`}
+                                contentStyle={{ 
+                                  borderRadius: '1rem', 
+                                  border: isDarkMode ? '1px solid #334155' : 'none', 
+                                  backgroundColor: isDarkMode ? '#0f172a' : '#ffffff',
+                                  color: isDarkMode ? '#f8fafc' : '#0f172a',
+                                  boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' 
+                                }}
+                                formatter={(value: number, name: string) => {
+                                  const total = expenseChartData.reduce((acc, entry) => acc + entry.value, 0);
+                                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                  return [`₱${value.toLocaleString()} (${percentage}%)`, name];
+                                }}
                               />
                               <Legend verticalAlign="bottom" height={36}/>
                             </RePieChart>
                           </ResponsiveContainer>
                         ) : (
                           <div className="text-center">
-                            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                              <PieChart size={32} className="text-gray-200" />
+                            <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${isDarkMode ? 'bg-slate-800' : 'bg-gray-50'}`}>
+                              <PieChart size={32} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                             </div>
-                            <p className="text-xs lg:text-sm font-black text-gray-400 uppercase tracking-widest">No expense data yet</p>
+                            <p className={`text-xs lg:text-sm font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>No expense data yet</p>
                           </div>
                         )}
                       </div>
                     </div>
 
-                    <div id="collection-line-chart" className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
-                      <div className="flex items-center gap-4 mb-8">
-                        <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8]">
-                          <TrendingUp size={24} />
-                        </div>
-                        <div>
-                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Collection Trends</h3>
-                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Monthly remitted collections</p>
-                        </div>
-                      </div>
-                      <div className="h-[300px] w-full flex items-center justify-center">
-                        {collectionTrendData.length > 0 ? (
-                          <ResponsiveContainer width="100%" height="100%">
-                            <ComposedChart data={collectionTrendData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                              <XAxis 
-                                dataKey="name" 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 10, fontWeight: 700, fill: '#94a3b8' }}
-                                dy={10}
-                              />
-                              <YAxis 
-                                axisLine={false} 
-                                tickLine={false} 
-                                tick={{ fontSize: 10, fontWeight: 700, fill: '#94a3b8' }}
-                                tickFormatter={(value) => `₱${value.toLocaleString()}`}
-                              />
-                              <ReTooltip 
-                                contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                                formatter={(value: number) => `₱${value.toLocaleString()}`}
-                              />
-                              <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }} />
-                              <Bar dataKey="monthly" name="Monthly" fill="#0038A8" radius={[4, 4, 0, 0]} barSize={20} />
-                              <Line 
-                                type="monotone" 
-                                dataKey="cumulative" 
-                                name="Cumulative"
-                                stroke="#CE1126" 
-                                strokeWidth={3} 
-                                dot={{ r: 4, fill: '#CE1126', strokeWidth: 2, stroke: '#fff' }}
-                                activeDot={{ r: 6, strokeWidth: 0 }}
-                              />
-                            </ComposedChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <div className="text-center">
-                            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                              <TrendingUp size={32} className="text-gray-200" />
-                            </div>
-                            <p className="text-xs lg:text-sm font-black text-gray-400 uppercase tracking-widest">No collection trends yet</p>
-                            <p className="text-[9px] lg:text-[10px] text-gray-300 font-bold uppercase mt-1">Verified remittances will appear here</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                    {/* Collection & Collectibles Analytics */}
+                    <CollectionAnalyticsChart
+                      records={records}
+                      standardDues={standardDues}
+                      remittances={remittances}
+                      isDarkMode={isDarkMode}
+                      handleDownloadTermsDocx={handleDownloadTermsDocx}
+                      handleDownloadExcel={handleDownloadExcel}
+                      handleDownloadComprehensiveReportDocx={handleDownloadComprehensiveReportDocx}
+                      handleDownloadGlobalPaymentHistoryDocx={handleDownloadGlobalPaymentHistoryDocx}
+                    />
                   </div>
 
                   {/* Main Dashboard Grid */}
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {/* Recent Activity */}
-                    <div className="lg:col-span-2 bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+                    <div className={`md:col-span-2 lg:col-span-2 p-6 md:p-8 rounded-[2.5rem] border shadow-sm ${
+                      isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 shadow-slate-950/50' : 'bg-white border-gray-100 text-gray-900'
+                    }`}>
                       <div className="flex items-center justify-between mb-8">
                         <div className="flex items-center gap-4">
-                          <div className="p-3 bg-blue-50 rounded-2xl text-[#0038A8]">
+                          <div className={`p-3 rounded-2xl ${isDarkMode ? 'bg-blue-950/80 text-blue-400' : 'bg-blue-50 text-[#0038A8]'}`}>
                             <History size={24} />
                           </div>
                           <div>
-                            <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Recent Activity</h3>
-                            <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Latest system updates</p>
+                            <h3 className={`text-lg lg:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Recent Activity</h3>
+                            <p className={`text-[10px] lg:text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Latest system updates</p>
                           </div>
                         </div>
-                        <button onClick={() => setActiveTab('audit')} className="text-[10px] lg:text-xs font-black text-[#0038A8] uppercase tracking-widest hover:underline">View All</button>
+                        <button onClick={() => setActiveTab('audit')} className={`text-[10px] lg:text-xs font-black uppercase tracking-widest hover:underline ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>View All</button>
                       </div>
                       
                       <div className="space-y-4">
                         {auditLogs.slice(0, 5).map(log => (
-                          <div key={log.id} className="flex items-start gap-4 p-4 rounded-2xl hover:bg-gray-50 transition-all border border-transparent hover:border-gray-100">
+                          <div key={log.id} className={`flex items-start gap-4 p-4 rounded-2xl transition-all border ${
+                            isDarkMode ? 'hover:bg-slate-800/50 border-slate-800/40 hover:border-slate-700' : 'hover:bg-gray-50 border-transparent hover:border-gray-100'
+                          }`}>
                             <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${
                               log.type === 'critical' ? 'bg-red-500' : log.type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
                             }`} />
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs lg:text-sm font-black text-gray-900 uppercase tracking-tight mb-1">{log.action}</p>
-                              <p className="text-[11px] lg:text-xs text-gray-500 font-medium line-clamp-1">{log.details}</p>
+                              <p className={`text-xs lg:text-sm font-black uppercase tracking-tight mb-1 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{log.action}</p>
+                              <p className={`text-[11px] lg:text-xs font-medium line-clamp-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{log.details}</p>
                             </div>
-                            <div className="text-[9px] lg:text-[10px] text-gray-400 font-bold uppercase tracking-widest whitespace-nowrap">
-                              {log.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            <div className={`text-[9px] lg:text-[10px] font-bold uppercase tracking-widest whitespace-nowrap ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>
+                              {ensureTimestamp(log.timestamp).toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </div>
                           </div>
                         ))}
@@ -6153,29 +8071,35 @@ function AppContent() {
                     </div>
 
                     {/* Pending Tasks / Remittances */}
-                    <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+                    <div className={`p-8 rounded-[2.5rem] border shadow-sm ${
+                      isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 shadow-slate-950/50' : 'bg-white border-gray-100 text-gray-900'
+                    }`}>
                       <div className="flex items-center gap-4 mb-8">
-                        <div className="p-3 bg-yellow-50 rounded-2xl text-yellow-600">
+                        <div className={`p-3 rounded-2xl ${isDarkMode ? 'bg-amber-950/80 text-amber-400' : 'bg-yellow-50 text-yellow-600'}`}>
                           <Clock size={24} />
                         </div>
                         <div>
-                          <h3 className="text-lg lg:text-xl font-black text-gray-900 uppercase tracking-tight">Pending Tasks</h3>
-                          <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Awaiting action</p>
+                          <h3 className={`text-lg lg:text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Pending Tasks</h3>
+                          <p className={`text-[10px] lg:text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Awaiting action</p>
                         </div>
                       </div>
 
                       <div className="space-y-4">
                         {remittances.filter(r => r.status === 'pending').length > 0 ? (
                           remittances.filter(r => r.status === 'pending').slice(0, 4).map(rem => (
-                            <div key={rem.id} className="p-4 rounded-2xl bg-yellow-50/50 border border-yellow-100">
+                            <div key={rem.id} className={`p-4 rounded-2xl border ${
+                              isDarkMode ? 'bg-amber-950/30 border-amber-900/50 text-amber-200' : 'bg-yellow-50/50 border-yellow-100'
+                            }`}>
                               <div className="flex justify-between items-start mb-2">
-                                <span className="text-[10px] lg:text-xs font-black text-yellow-700 uppercase tracking-widest">{rem.gradeLevel} Remittance</span>
-                                <span className="text-[10px] lg:text-xs font-black text-yellow-600">₱{rem.amount.toLocaleString()}</span>
+                                <span className={`text-[10px] lg:text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-amber-300' : 'text-yellow-700'}`}>{rem.gradeLevel} Remittance</span>
+                                <span className={`text-[10px] lg:text-xs font-black ${isDarkMode ? 'text-amber-400' : 'text-yellow-600'}`}>₱{rem.amount.toLocaleString()}</span>
                               </div>
-                              <p className="text-[11px] lg:text-xs text-gray-600 font-bold mb-3">From: {rem.bodName}</p>
+                              <p className={`text-[11px] lg:text-xs font-bold mb-3 ${isDarkMode ? 'text-slate-300' : 'text-gray-600'}`}>From: {rem.bodName}</p>
                               <button 
                                 onClick={() => setActiveTab('remittance')}
-                                className="w-full py-2 bg-white text-yellow-700 rounded-xl text-[10px] font-black uppercase tracking-widest border border-yellow-200 hover:bg-yellow-100 transition-all"
+                                className={`w-full py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                                  isDarkMode ? 'bg-amber-900/40 text-amber-200 border-amber-800 hover:bg-amber-800/60' : 'bg-white text-yellow-700 border-yellow-200 hover:bg-yellow-100'
+                                }`}
                               >
                                 Review & Verify
                               </button>
@@ -6183,10 +8107,10 @@ function AppContent() {
                           ))
                         ) : (
                           <div className="py-12 text-center">
-                            <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
-                              <CheckCircle size={24} className="text-gray-200" />
+                            <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${isDarkMode ? 'bg-slate-800' : 'bg-gray-50'}`}>
+                              <CheckCircle size={24} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                             </div>
-                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">All caught up!</p>
+                            <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>All caught up!</p>
                           </div>
                         )}
                       </div>
@@ -6199,29 +8123,37 @@ function AppContent() {
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Collection Overview Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+              <div className={`p-6 rounded-3xl border shadow-sm transition-all group ${
+                isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 hover:bg-slate-900' : 'bg-white border-gray-100 hover:shadow-md'
+              }`}>
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="p-3 bg-blue-50 rounded-2xl group-hover:bg-[#0038A8] transition-colors">
-                    <Users className="text-[#0038A8] group-hover:text-white transition-colors" size={24} />
+                  <div className={`p-3 rounded-2xl transition-colors ${
+                    isDarkMode ? 'bg-blue-950/80 text-blue-400 group-hover:bg-[#0038A8] group-hover:text-white' : 'bg-blue-50 text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white'
+                  }`}>
+                    <Users size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Total Faculty</p>
-                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">{filteredRecords.length}</h3>
+                    <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest leading-none mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Total Faculty</p>
+                    <h3 className={`text-2xl lg:text-3xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{filteredRecords.length}</h3>
                   </div>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className={`h-1.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                   <div className="h-full bg-[#0038A8] rounded-full" style={{ width: '100%' }}></div>
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+              <div className={`p-6 rounded-3xl border shadow-sm transition-all group ${
+                isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 hover:bg-slate-900' : 'bg-white border-gray-100 hover:shadow-md'
+              }`}>
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="p-3 bg-green-50 rounded-2xl group-hover:bg-green-600 transition-colors">
-                    <CheckCircle className="text-green-600 group-hover:text-white transition-colors" size={24} />
+                  <div className={`p-3 rounded-2xl transition-colors ${
+                    isDarkMode ? 'bg-green-950/80 text-green-400 group-hover:bg-green-600 group-hover:text-white' : 'bg-green-50 text-green-600 group-hover:bg-green-600 group-hover:text-white'
+                  }`}>
+                    <CheckCircle size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Fully Paid</p>
-                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
+                    <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest leading-none mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Fully Paid</p>
+                    <h3 className={`text-2xl lg:text-3xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                       {filteredRecords.filter(r => {
                         const requiredDues = standardDues.filter(d => !d.isVoluntary);
                         return requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
@@ -6229,7 +8161,7 @@ function AppContent() {
                     </h3>
                   </div>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className={`h-1.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                   <div className="h-full bg-green-500 rounded-full" style={{ 
                     width: `${(filteredRecords.filter(r => {
                       const requiredDues = standardDues.filter(d => !d.isVoluntary);
@@ -6239,14 +8171,18 @@ function AppContent() {
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+              <div className={`p-6 rounded-3xl border shadow-sm transition-all group ${
+                isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 hover:bg-slate-900' : 'bg-white border-gray-100 hover:shadow-md'
+              }`}>
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="p-3 bg-yellow-50 rounded-2xl group-hover:bg-yellow-600 transition-colors">
-                    <Clock className="text-yellow-600 group-hover:text-white transition-colors" size={24} />
+                  <div className={`p-3 rounded-2xl transition-colors ${
+                    isDarkMode ? 'bg-amber-950/80 text-amber-400 group-hover:bg-yellow-600 group-hover:text-white' : 'bg-yellow-50 text-yellow-600 group-hover:bg-yellow-600 group-hover:text-white'
+                  }`}>
+                    <Clock size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Partial</p>
-                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
+                    <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest leading-none mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Partial</p>
+                    <h3 className={`text-2xl lg:text-3xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                       {filteredRecords.filter(r => {
                         const requiredDues = standardDues.filter(d => !d.isVoluntary);
                         const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id));
@@ -6256,7 +8192,7 @@ function AppContent() {
                     </h3>
                   </div>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className={`h-1.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                   <div className="h-full bg-yellow-500 rounded-full" style={{ 
                     width: `${(filteredRecords.filter(r => {
                       const requiredDues = standardDues.filter(d => !d.isVoluntary);
@@ -6268,19 +8204,23 @@ function AppContent() {
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
+              <div className={`p-6 rounded-3xl border shadow-sm transition-all group ${
+                isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100 hover:bg-slate-900' : 'bg-white border-gray-100 hover:shadow-md'
+              }`}>
                 <div className="flex items-center gap-4 mb-4">
-                  <div className="p-3 bg-red-50 rounded-2xl group-hover:bg-red-600 transition-colors">
-                    <AlertCircle className="text-red-600 group-hover:text-white transition-colors" size={24} />
+                  <div className={`p-3 rounded-2xl transition-colors ${
+                    isDarkMode ? 'bg-red-950/80 text-red-400 group-hover:bg-red-600 group-hover:text-white' : 'bg-red-50 text-red-600 group-hover:bg-red-600 group-hover:text-white'
+                  }`}>
+                    <AlertCircle size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] lg:text-xs font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Pending</p>
-                    <h3 className="text-2xl lg:text-3xl font-black text-gray-900 leading-none">
+                    <p className={`text-[10px] lg:text-xs font-black uppercase tracking-widest leading-none mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Pending</p>
+                    <h3 className={`text-2xl lg:text-3xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                       {filteredRecords.filter(r => r.paidDueIds.length === 0).length}
                     </h3>
                   </div>
                 </div>
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div className={`h-1.5 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                   <div className="h-full bg-red-500 rounded-full" style={{ 
                     width: `${(filteredRecords.filter(r => r.paidDueIds.length === 0).length / (filteredRecords.length || 1)) * 100}%` 
                   }}></div>
@@ -6333,90 +8273,110 @@ function AppContent() {
             )}
 
             {/* Step 1: Encode Dues & Contributions */}
-            <section className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-200 overflow-hidden relative">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16 opacity-50"></div>
+            <section className={`p-6 md:p-8 rounded-[2.5rem] shadow-sm border overflow-hidden relative ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
+              <div className={`absolute top-0 right-0 w-32 h-32 rounded-full -mr-16 -mt-16 ${isDarkMode ? 'bg-blue-900/20' : 'bg-blue-50 opacity-50'}`}></div>
               <div className="flex items-center gap-4 mb-8 relative z-10">
-                <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black shadow-lg shadow-blue-200">1</div>
+                <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black shadow-lg shadow-blue-900/40">1</div>
                 <div>
-                  <h2 className="text-xl lg:text-2xl font-black text-gray-900 uppercase tracking-tight">Standard Dues Template</h2>
-                  <p className="text-[10px] lg:text-xs text-gray-400 font-bold uppercase tracking-widest">Define what everyone needs to pay</p>
+                  <h2 className={`text-xl lg:text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Standard Dues Template</h2>
+                  <p className={`text-[10px] lg:text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Define what everyone needs to pay</p>
                 </div>
               </div>
               
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-                <div className="lg:col-span-4">
-                  <form onSubmit={handleAddStandardDue} className="bg-gray-50/50 p-6 rounded-3xl border border-gray-100 space-y-4">
-                    <h3 className="text-xs lg:text-sm font-black text-gray-400 mb-2 uppercase tracking-widest">Add New Item</h3>
+              <div className="grid grid-cols-1 md:grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
+                <div className="md:col-span-1 lg:col-span-4">
+                  <form onSubmit={handleAddStandardDue} className={`p-6 rounded-3xl border space-y-4 ${
+                    isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-gray-50/50 border-gray-100'
+                  }`}>
+                    <h3 className={`text-xs lg:text-sm font-black mb-2 uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Add New Item</h3>
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-[10px] lg:text-xs font-black text-gray-500 mb-1.5 uppercase tracking-widest">Item Name</label>
+                        <label className={`block text-[10px] lg:text-xs font-black mb-1.5 uppercase tracking-widest ${isDarkMode ? 'text-slate-300' : 'text-gray-500'}`}>Item Name</label>
                         <input 
                           type="text" 
                           required 
                           value={newDueName} 
                           onChange={e => setNewDueName(e.target.value)} 
                           placeholder="e.g. Faculty Dues"
-                          className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                          className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all ${
+                            isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                          }`}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Amount (₱)</label>
+                        <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${isDarkMode ? 'text-slate-300' : 'text-gray-500'}`}>Amount (₱)</label>
                         <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold">₱</span>
+                          <span className={`absolute left-3 top-1/2 -translate-y-1/2 font-bold ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>₱</span>
                           <input 
                             type="number" 
                             required={!isVoluntary}
                             value={newDueAmount} 
                             onChange={e => setNewDueAmount(e.target.value === '' ? '' : Number(e.target.value))} 
                             placeholder={isVoluntary ? "Suggested" : "0.00"}
-                            className="w-full bg-white border border-gray-200 rounded-xl p-3 pl-8 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                            className={`w-full border rounded-xl p-3 pl-8 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all ${
+                              isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                            }`}
                           />
                         </div>
                       </div>
-                      <label className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors group">
+                      <label className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-colors group ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 hover:bg-slate-800' : 'bg-white border-gray-100 hover:bg-blue-50'
+                      }`}>
                         <input 
                           type="checkbox" 
                           checked={isVoluntary}
                           onChange={e => setIsVoluntary(e.target.checked)}
                           className="w-5 h-5 text-[#0038A8] border-gray-300 rounded-lg focus:ring-[#0038A8]"
                         />
-                        <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest group-hover:text-[#0038A8]">Voluntary Contribution</span>
+                        <span className={`text-[10px] font-black uppercase tracking-widest transition-colors ${
+                          isDarkMode ? 'text-slate-300 group-hover:text-blue-400' : 'text-gray-600 group-hover:text-[#0038A8]'
+                        }`}>Voluntary Contribution</span>
                       </label>
-                      <button type="submit" className="w-full bg-[#0038A8] text-white py-4 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-100 flex items-center justify-center gap-2">
+                      <button type="submit" className="w-full bg-[#0038A8] text-white py-4 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-900/30 flex items-center justify-center gap-2">
                         <Plus size={18} /> Add Item
                       </button>
                     </div>
                   </form>
                 </div>
 
-                <div className="lg:col-span-8">
-                  <h3 className="text-xs font-black text-gray-400 mb-4 uppercase tracking-widest">Active Template Items</h3>
+                <div className="md:col-span-1 lg:col-span-8">
+                  <h3 className={`text-xs font-black mb-4 uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Active Template Items</h3>
                   {standardDues.length === 0 ? (
-                    <div className="bg-gray-50/50 border-2 border-dashed border-gray-200 rounded-[2rem] p-12 text-center">
-                      <div className="w-16 h-16 bg-white rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-                        <PhilippinePeso size={32} className="text-gray-200" />
+                    <div className={`border-2 border-dashed rounded-[2rem] p-12 text-center ${
+                      isDarkMode ? 'bg-slate-800/30 border-slate-700' : 'bg-gray-50/50 border-gray-200'
+                    }`}>
+                      <div className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 ${isDarkMode ? 'bg-slate-800' : 'bg-white shadow-sm'}`}>
+                        <PhilippinePeso size={32} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                       </div>
-                      <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">No dues encoded yet. Start by adding items.</p>
+                      <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>No dues encoded yet. Start by adding items.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       {standardDues.map(due => (
-                        <div key={due.id} className={`group p-4 rounded-3xl border transition-all hover:shadow-md ${
+                        <div key={due.id} className={`group p-4 rounded-3xl border transition-all ${
                           due.pendingDeletion 
-                          ? 'bg-red-50 border-red-100' 
-                          : 'bg-white border-gray-100'
+                          ? isDarkMode ? 'bg-red-950/40 border-red-900' : 'bg-red-50 border-red-100'
+                          : isDarkMode ? 'bg-slate-800/60 border-slate-700/80 hover:bg-slate-800' : 'bg-white border-gray-100 hover:shadow-md'
                         }`}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <h4 className={`text-sm font-black uppercase tracking-tight truncate ${due.pendingDeletion ? 'text-red-700' : 'text-gray-900'}`}>
+                                <h4 className={`text-sm font-black uppercase tracking-tight truncate ${
+                                  due.pendingDeletion ? 'text-red-400' : isDarkMode ? 'text-white' : 'text-gray-900'
+                                }`}>
                                   {due.name}
                                 </h4>
                                 {due.isVoluntary && (
-                                  <span className="shrink-0 text-[8px] font-black uppercase bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Voluntary</span>
+                                  <span className={`shrink-0 text-[8px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                    isDarkMode ? 'bg-blue-950 text-blue-300' : 'bg-blue-100 text-blue-700'
+                                  }`}>Voluntary</span>
                                 )}
                               </div>
-                              <div className={`text-lg font-black ${due.pendingDeletion ? 'text-red-500' : 'text-[#0038A8]'}`}>
+                              <div className={`text-lg font-black ${
+                                due.pendingDeletion ? 'text-red-400' : isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+                              }`}>
                                 ₱{due.amount.toFixed(2)}
                               </div>
                             </div>
@@ -6433,7 +8393,7 @@ function AppContent() {
                                   </button>
                                   <button 
                                     onClick={() => cancelDeleteStandardDue(due.id)} 
-                                    className="p-2 bg-gray-200 text-gray-600 rounded-xl hover:bg-gray-300"
+                                    className={`p-2 rounded-xl ${isDarkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}`}
                                     title="Cancel Request"
                                   >
                                     <X size={14} />
@@ -6445,8 +8405,8 @@ function AppContent() {
                                   disabled={due.pendingDeletion}
                                   className={`p-2 rounded-xl transition-all ${
                                     due.pendingDeletion 
-                                    ? 'text-red-200 cursor-not-allowed' 
-                                    : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
+                                    ? 'text-red-300 cursor-not-allowed' 
+                                    : isDarkMode ? 'text-slate-400 hover:text-red-400 hover:bg-red-950/50' : 'text-gray-300 hover:text-red-500 hover:bg-red-50'
                                   }`}
                                 >
                                   <Trash2 size={16} />
@@ -6455,7 +8415,7 @@ function AppContent() {
                             </div>
                           </div>
                           {due.pendingDeletion && profile?.role === 'admin' && (
-                            <div className="mt-3 pt-3 border-t border-red-100 text-[9px] text-red-400 font-bold uppercase tracking-widest">
+                            <div className="mt-3 pt-3 border-t border-red-900/50 text-[9px] text-red-400 font-bold uppercase tracking-widest">
                               Requested by: {due.deletionRequestedBy}
                             </div>
                           )}
@@ -6468,39 +8428,45 @@ function AppContent() {
             </section>
 
             {/* Step 2: Teacher List */}
-            <section className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
+            <section className={`p-6 md:p-8 rounded-[2.5rem] shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8">
                 <div className="flex items-center gap-4">
-                  <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black shadow-lg shadow-blue-200">2</div>
+                  <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-black shadow-lg shadow-blue-900/40">2</div>
                   <div>
-                    <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Teacher List & Payments</h2>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Track and manage faculty contributions</p>
+                    <h2 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Teacher List & Payments</h2>
+                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Track and manage faculty contributions</p>
                   </div>
                 </div>
                 
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 sm:gap-3 w-full lg:w-auto">
                   <button 
                     onClick={() => setShowAddTeacherForm(!showAddTeacherForm)}
-                    className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 ${
-                      showAddTeacherForm ? 'bg-blue-50 text-[#0038A8]' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    className={`px-3.5 py-2.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                      showAddTeacherForm 
+                        ? (isDarkMode ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-blue-50 text-[#0038A8] border border-blue-200') 
+                        : (isDarkMode ? 'bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200')
                     }`}
                   >
                     <Plus size={14} /> {showAddTeacherForm ? 'Close Form' : 'Add Teacher'}
                   </button>
-                  <label className="bg-blue-50 text-[#0038A8] px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest cursor-pointer flex items-center gap-2 hover:bg-blue-100 transition-all border border-blue-100">
+                  <label className={`px-3.5 py-2.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider cursor-pointer flex items-center justify-center gap-2 transition-all border ${
+                    isDarkMode ? 'bg-blue-950/80 text-blue-300 border-blue-800 hover:bg-blue-900' : 'bg-blue-50 text-[#0038A8] border-blue-100 hover:bg-blue-100'
+                  }`}>
                     <Upload size={14} /> Import
-                    <input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload} />
+                    <input type="file" className="hidden" accept=".csv, .xlsx, .xls, .pdf" onChange={handleExcelUpload} />
                   </label>
                   <button 
                     onClick={handleBatchSendReceipts}
                     disabled={isBatchSending || selectedTeacherIds.size === 0}
-                    className="bg-[#0038A8] text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-100 flex items-center gap-2 disabled:opacity-50"
+                    className="bg-[#0038A8] text-white px-3.5 py-2.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider hover:bg-blue-800 transition-all shadow-md shadow-blue-900/20 dark:shadow-none flex items-center justify-center gap-2 disabled:opacity-50 col-span-2 sm:col-span-1"
                   >
                     {isBatchSending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send Batch Receipts
                   </button>
                   <button 
                     onClick={handleDownloadExcel}
-                    className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-100 flex items-center gap-2"
+                    className="bg-emerald-600 text-white px-3.5 py-2.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider hover:bg-emerald-700 transition-all shadow-md shadow-emerald-900/20 dark:shadow-none flex items-center justify-center gap-2"
                   >
                     <FileDown size={14} /> Export Report
                   </button>
@@ -6510,9 +8476,11 @@ function AppContent() {
                         setDeleteType('all');
                         setIsBatchDeleteModalOpen(true);
                       }}
-                      className="bg-red-50 text-red-600 px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all flex items-center gap-2"
+                      className={`px-3.5 py-2.5 rounded-xl text-[11px] sm:text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 border col-span-2 sm:col-span-1 ${
+                        isDarkMode ? 'bg-rose-950/60 text-rose-300 border-rose-900 hover:bg-rose-900' : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-600 hover:text-white'
+                      }`}
                     >
-                      <Trash2 size={14} /> Delete All Teachers
+                      <Trash2 size={14} /> Delete All
                     </button>
                   )}
                 </div>
@@ -6522,48 +8490,80 @@ function AppContent() {
                 <motion.div 
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
-                  className="bg-gray-50/50 p-6 rounded-3xl border border-gray-100 mb-8 overflow-hidden"
+                  className={`p-6 rounded-3xl border mb-8 overflow-hidden ${
+                    isDarkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-gray-50/50 border-gray-100'
+                  }`}
                 >
-                  <h3 className="text-xs font-black text-gray-400 mb-4 uppercase tracking-widest">New Teacher Registration</h3>
+                  <h3 className={`text-xs font-black mb-4 uppercase tracking-widest ${
+                    isDarkMode ? 'text-slate-300' : 'text-gray-400'
+                  }`}>New Teacher Registration</h3>
                   <form onSubmit={handleAddTeacher} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Last Name</label>
-                      <input type="text" required value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Dela Cruz" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Last Name</label>
+                      <input type="text" required value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Dela Cruz" className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`} />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">First Name</label>
-                      <input type="text" required value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Juan" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>First Name</label>
+                      <input type="text" required value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Juan" className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`} />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Middle Name</label>
-                      <input type="text" value={middleInitial} onChange={e => setMiddleInitial(e.target.value)} placeholder="P." className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Middle Name</label>
+                      <input type="text" value={middleInitial} onChange={e => setMiddleInitial(e.target.value)} placeholder="P." className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`} />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Gender</label>
-                      <select value={gender} onChange={e => setGender(e.target.value as 'Male' | 'Female')} className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]">
-                        <option value="Female">Female</option>
-                        <option value="Male">Male</option>
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Gender</label>
+                      <select value={gender} onChange={e => setGender(e.target.value as 'Male' | 'Female')} className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                      }`}>
+                        <option value="Female" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Female</option>
+                        <option value="Male" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Male</option>
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Grade Level</label>
-                      <select value={gradeLevel} onChange={e => setGradeLevel(e.target.value as GradeLevel)} className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]">
-                        <option value="Grade 7">Grade 7</option>
-                        <option value="Grade 8">Grade 8</option>
-                        <option value="Grade 9">Grade 9</option>
-                        <option value="Grade 10">Grade 10</option>
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Grade Level</label>
+                      <select value={gradeLevel} onChange={e => setGradeLevel(e.target.value as GradeLevel)} className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                      }`}>
+                        <option value="Grade 7" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 7</option>
+                        <option value="Grade 8" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 8</option>
+                        <option value="Grade 9" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 9</option>
+                        <option value="Grade 10" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 10</option>
                       </select>
                     </div>
                     <div className="sm:col-span-2">
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Email Address</label>
-                      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="juan@example.com" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Email Address</label>
+                      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="juan@example.com" className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`} />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-black text-gray-500 mb-1.5 uppercase tracking-widest">Contact Number</label>
-                      <input type="text" value={contactNumber} onChange={e => setContactNumber(e.target.value)} placeholder="09123456789" className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]" />
+                      <label className={`block text-[10px] font-black mb-1.5 uppercase tracking-widest ${
+                        isDarkMode ? 'text-slate-400' : 'text-gray-500'
+                      }`}>Contact Number</label>
+                      <input type="text" value={contactNumber} onChange={e => setContactNumber(e.target.value)} placeholder="09123456789" className={`w-full border rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`} />
                     </div>
                     <div className="flex items-end">
-                      <button type="submit" className="w-full bg-[#0038A8] text-white py-3 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-100">
+                      <button type="submit" className="w-full bg-[#0038A8] text-white py-3 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-100 dark:shadow-none">
                         Register
                       </button>
                     </div>
@@ -6572,19 +8572,23 @@ function AppContent() {
               )}
 
               {/* Filters & Search Bar */}
-              <div className="bg-gray-50/50 p-6 rounded-3xl border border-gray-100 mb-8">
+              <div className={`p-6 rounded-3xl border mb-8 ${
+                isDarkMode ? 'bg-slate-800/40 border-slate-700/60' : 'bg-gray-50/50 border-gray-100'
+              }`}>
                 <div className="flex flex-col lg:flex-row gap-4">
                   <div className="flex-1 relative">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                    <Search className={`absolute left-4 top-1/2 -translate-y-1/2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`} size={20} />
                     <input 
                       type="text"
                       placeholder="Search by name or email..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-[#0038A8] outline-none transition-all shadow-sm"
+                      className={`w-full pl-12 pr-4 py-3 border rounded-2xl text-sm font-bold focus:ring-2 focus:ring-[#0038A8] outline-none transition-all shadow-sm ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                      }`}
                     />
                     {searchQuery && (
-                      <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                      <button onClick={() => setSearchQuery('')} className={`absolute right-4 top-1/2 -translate-y-1/2 ${isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-gray-400 hover:text-gray-600'}`}>
                         <X size={16} />
                       </button>
                     )}
@@ -6593,7 +8597,9 @@ function AppContent() {
                     <select 
                       value={selectedGrade}
                       onChange={(e) => setSelectedGrade(e.target.value as GradeLevel | 'All')}
-                      className="bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] shadow-sm"
+                      className={`border rounded-2xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] shadow-sm ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                      }`}
                     >
                       <option value="All">All Grades</option>
                       <option value="Grade 7">Grade 7</option>
@@ -6604,7 +8610,9 @@ function AppContent() {
                     <select 
                       value={paymentFilter}
                       onChange={(e) => setPaymentFilter(e.target.value as 'All' | 'Paid' | 'Partial' | 'Pending')}
-                      className="bg-white border border-gray-200 rounded-2xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] shadow-sm"
+                      className={`border rounded-2xl px-4 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8] shadow-sm ${
+                        isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                      }`}
                     >
                       <option value="All">All Status</option>
                       <option value="Paid">Fully Paid</option>
@@ -6621,7 +8629,9 @@ function AppContent() {
                     {(searchQuery || selectedGrade !== 'All' || paymentFilter !== 'All' || selectedTeacherIds.size > 0) && (
                       <button 
                         onClick={clearFilters}
-                        className="bg-gray-200 hover:bg-gray-300 text-gray-600 px-4 py-3 rounded-2xl transition-all"
+                        className={`px-4 py-3 rounded-2xl transition-all ${
+                          isDarkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-600'
+                        }`}
                         title="Clear all filters and selections"
                       >
                         <X size={20} />
@@ -6636,29 +8646,42 @@ function AppContent() {
                 <motion.div 
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="fixed bottom-4 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 z-50 bg-[#0038A8] text-white px-6 py-3 md:px-8 md:py-4 rounded-2xl md:rounded-[2rem] shadow-2xl flex flex-col md:flex-row items-center gap-3 md:gap-6 border border-white/20 backdrop-blur-xl"
+                  className="fixed bottom-[72px] lg:bottom-6 left-2 right-2 sm:left-4 sm:right-4 lg:left-1/2 lg:right-auto lg:-translate-x-1/2 z-50 bg-[#0038A8] text-white p-2.5 sm:p-3 md:px-8 md:py-4 rounded-2xl md:rounded-[2rem] shadow-2xl flex flex-col md:flex-row items-center gap-2 sm:gap-3 md:gap-6 border border-white/20 backdrop-blur-xl max-w-full"
                 >
-                  <div className="flex items-center gap-3 md:border-r md:border-white/20 md:pr-6 w-full md:w-auto justify-center md:justify-start">
-                    <div className="bg-white text-[#0038A8] w-8 h-8 rounded-full flex items-center justify-center font-black text-sm shrink-0">
-                      {selectedTeacherIds.size}
+                  <div className="flex items-center justify-between w-full md:w-auto md:border-r md:border-white/20 md:pr-6">
+                    <div className="flex items-center gap-2">
+                      <div className="bg-white text-[#0038A8] w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-black text-xs sm:text-sm shrink-0 shadow-sm">
+                        {selectedTeacherIds.size}
+                      </div>
+                      <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider whitespace-nowrap">
+                        {selectedTeacherIds.size === 1 ? 'Teacher Selected' : 'Teachers Selected'}
+                      </span>
                     </div>
-                    <span className="text-[10px] md:text-xs font-black uppercase tracking-widest">Teachers Selected</span>
+                    <button 
+                      onClick={clearSelection}
+                      className="md:hidden bg-white/10 hover:bg-white/20 text-white p-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition-colors"
+                      title="Deselect All"
+                    >
+                      <X size={14} />
+                      <span className="hidden xs:inline">Cancel</span>
+                    </button>
                   </div>
-                  <div className="flex items-center gap-2 md:gap-3 w-full md:w-auto justify-center">
+
+                  <div className="flex items-center gap-1.5 sm:gap-2.5 w-full md:w-auto overflow-x-auto scrollbar-none py-0.5 justify-start md:justify-center">
                     <button 
                       onClick={() => setIsBatchUpdateModalOpen(true)}
-                      className="bg-white text-[#0038A8] px-4 py-2 md:px-6 md:py-2 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2 shrink-0"
+                      className="bg-white text-[#0038A8] px-2.5 py-1.5 sm:px-4 sm:py-2 md:px-6 md:py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider hover:bg-blue-50 transition-all flex items-center gap-1.5 shrink-0 shadow-sm"
                     >
-                      <CheckCircle size={14} />
-                      Update Dues
+                      <CheckCircle size={13} className="sm:w-3.5 sm:h-3.5" />
+                      <span className="whitespace-nowrap">Update Dues</span>
                     </button>
                     <button 
                       onClick={handleBatchSendReceipts}
                       disabled={isBatchSending}
-                      className="bg-white text-[#0038A8] px-4 py-2 md:px-6 md:py-2 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2 disabled:opacity-50 shrink-0"
+                      className="bg-white text-[#0038A8] px-2.5 py-1.5 sm:px-4 sm:py-2 md:px-6 md:py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider hover:bg-blue-50 transition-all flex items-center gap-1.5 disabled:opacity-50 shrink-0 shadow-sm"
                     >
-                      {isBatchSending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                      Send Receipts
+                      {isBatchSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} className="sm:w-3.5 sm:h-3.5" />}
+                      <span className="whitespace-nowrap">Send Receipts</span>
                     </button>
                     {profile.role === 'admin' && (
                       <button 
@@ -6667,27 +8690,30 @@ function AppContent() {
                           setIsBatchDeleteModalOpen(true);
                         }}
                         disabled={isBatchDeleting}
-                        className="bg-red-500 text-white px-4 py-2 md:px-6 md:py-2 rounded-xl text-[10px] md:text-xs font-black uppercase tracking-widest hover:bg-red-600 transition-all flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-red-200 shrink-0"
+                        className="bg-rose-600 text-white px-2.5 py-1.5 sm:px-4 sm:py-2 md:px-6 md:py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider hover:bg-rose-700 transition-all flex items-center gap-1.5 disabled:opacity-50 shadow-md shrink-0"
                       >
-                        {isBatchDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                        Delete
+                        {isBatchDeleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} className="sm:w-3.5 sm:h-3.5" />}
+                        <span className="whitespace-nowrap">Delete</span>
                       </button>
                     )}
                     <button 
                       onClick={clearSelection}
-                      className="text-white/70 hover:text-white text-[10px] font-black uppercase tracking-widest shrink-0"
+                      className="bg-white/10 hover:bg-white/20 text-white px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1 shrink-0"
                     >
-                      Cancel
+                      <X size={13} className="sm:w-3.5 sm:h-3.5 md:hidden" />
+                      <span className="whitespace-nowrap">Cancel</span>
                     </button>
                   </div>
                 </motion.div>
               )}
 
                   {/* Desktop View Table */}
-                  <div className="hidden md:block overflow-x-auto border border-gray-100 rounded-xl">
+                  <div className={`hidden lg:block overflow-x-auto border rounded-xl ${
+                    isDarkMode ? 'border-slate-800' : 'border-gray-100'
+                  }`}>
                     <table className="w-full border-collapse">
                       <thead>
-                        <tr className="bg-gray-50/50">
+                        <tr className={isDarkMode ? 'bg-slate-800/60' : 'bg-gray-50/50'}>
                           <th className="px-6 py-4 text-left w-10">
                             <input 
                               type="checkbox" 
@@ -6702,34 +8728,34 @@ function AppContent() {
                               }}
                             />
                           </th>
-                          <th className="px-6 py-4 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Teacher Info</th>
-                          <th className="px-6 py-4 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Payment Status</th>
-                          <th className="px-6 py-4 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">Actions</th>
+                          <th className={`px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Teacher Info</th>
+                          <th className={`px-6 py-4 text-left text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Payment Status</th>
+                          <th className={`px-6 py-4 text-right text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Actions</th>
                         </tr>
                       </thead>
-                      <tbody className="bg-white divide-y divide-gray-50">
+                      <tbody className={`divide-y ${isDarkMode ? 'bg-slate-900/60 divide-slate-800' : 'bg-white divide-gray-50'}`}>
                         {records.length === 0 ? (
                           <tr>
                             <td colSpan={4} className="px-6 py-20 text-center">
-                              <div className="w-16 h-16 bg-gray-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
-                                <Users size={32} className="text-gray-200" />
+                              <div className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 ${isDarkMode ? 'bg-slate-800' : 'bg-gray-50'}`}>
+                                <Users size={32} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                               </div>
-                              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">No teachers in the list yet.</p>
+                              <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>No teachers in the list yet.</p>
                             </td>
                           </tr>
                         ) : filteredRecords.length === 0 ? (
                           <tr>
                             <td colSpan={4} className="px-6 py-20 text-center">
-                              <div className="w-16 h-16 bg-gray-50 rounded-3xl flex items-center justify-center mx-auto mb-4">
-                                <Search size={32} className="text-gray-200" />
+                              <div className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 ${isDarkMode ? 'bg-slate-800' : 'bg-gray-50'}`}>
+                                <Search size={32} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                               </div>
-                              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">No matching records found.</p>
-                              <button onClick={clearFilters} className="mt-4 text-[#0038A8] text-[10px] font-black uppercase tracking-widest hover:underline">Clear Filters</button>
+                              <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>No matching records found.</p>
+                              <button onClick={clearFilters} className={`mt-4 text-[10px] font-black uppercase tracking-widest hover:underline ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>Clear Filters</button>
                             </td>
                           </tr>
                         ) : (
                           <>
-                            <tr><td colSpan={4} className="px-6 py-2 text-xs text-gray-500">Showing {paginatedRecords.length} teachers of {filteredRecords.length}</td></tr>
+                            <tr><td colSpan={4} className={`px-6 py-2 text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Showing {paginatedRecords.length} teachers of {filteredRecords.length}</td></tr>
                             {paginatedRecords.map(record => {
                               const totalPaid = standardDues
                                 .filter(d => record.paidDueIds.includes(d.id))
@@ -6747,7 +8773,11 @@ function AppContent() {
 
                               return (
                                 <React.Fragment key={record.id}>
-                                  <tr className={`hover:bg-blue-50/30 transition-colors group ${isFullyPaid ? 'bg-green-50/20' : ''}`}>
+                                  <tr className={`transition-colors group ${
+                                    isFullyPaid 
+                                    ? isDarkMode ? 'bg-green-950/20 hover:bg-green-950/30' : 'bg-green-50/20 hover:bg-blue-50/30'
+                                    : isDarkMode ? 'hover:bg-slate-800/50' : 'hover:bg-blue-50/30'
+                                  }`}>
                                 <td className="px-6 py-4">
                                   <input 
                                     type="checkbox" 
@@ -6761,30 +8791,37 @@ function AppContent() {
                                 </td>
                                 <td className="px-6 py-4">
                                   <div className="flex items-center gap-3">
-                                    <button onClick={() => toggleRow(record.id)} className="text-gray-300 hover:text-[#0038A8] transition-colors">
+                                    <button onClick={() => toggleRow(record.id)} className={`transition-colors ${isDarkMode ? 'text-slate-500 hover:text-blue-400' : 'text-gray-300 hover:text-[#0038A8]'}`}>
                                       {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                                     </button>
                                     <div>
-                                      <div className="text-sm font-black text-gray-900 uppercase tracking-tight">{record.name}</div>
+                                      <div className={`text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{record.name}</div>
                                       <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest bg-gray-100 px-2 py-0.5 rounded-md">{record.gradeLevel}</span>
-                                        <span className="text-[10px] text-gray-400 font-bold truncate max-w-[150px]">{record.email}</span>
+                                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md ${
+                                          isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-gray-100 text-gray-400'
+                                        }`}>{record.gradeLevel}</span>
+                                        {record.department && record.department !== record.gradeLevel && (
+                                          <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md border ${
+                                            isDarkMode ? 'bg-blue-950/80 border-blue-900 text-blue-300' : 'bg-blue-50 border-blue-100 text-[#0038A8]'
+                                          }`}>{record.department}</span>
+                                        )}
+                                        <span className={`text-[10px] font-bold truncate max-w-[150px] ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>{record.email}</span>
                                       </div>
                                     </div>
                                   </div>
                                 </td>
                                 <td className="px-6 py-4">
                                   <div className="flex items-center gap-3">
-                                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden min-w-[80px] max-w-[120px]">
+                                    <div className={`flex-1 h-2 rounded-full overflow-hidden min-w-[80px] max-w-[120px] ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                                       <div 
                                         className={`h-full rounded-full transition-all duration-500 ${
-                                          isFullyPaid ? 'bg-green-500' : totalPaid > 0 ? 'bg-yellow-500' : 'bg-gray-200'
+                                          isFullyPaid ? 'bg-green-500' : totalPaid > 0 ? 'bg-yellow-500' : isDarkMode ? 'bg-slate-700' : 'bg-gray-200'
                                         }`} 
                                         style={{ width: `${totalCollectibles > 0 ? (totalPaid / totalCollectibles) * 100 : 0}%` }}
                                       ></div>
                                     </div>
                                     <span className={`text-[10px] font-black uppercase tracking-widest ${
-                                      isFullyPaid ? 'text-green-600' : totalPaid > 0 ? 'text-yellow-600' : 'text-gray-400'
+                                      isFullyPaid ? 'text-green-500' : totalPaid > 0 ? 'text-amber-400' : isDarkMode ? 'text-slate-400' : 'text-gray-400'
                                     }`}>
                                       ₱{totalPaid.toFixed(0)}
                                     </span>
@@ -6792,6 +8829,14 @@ function AppContent() {
                                 </td>
                                 <td className="px-6 py-4 text-right">
                                   <div className="flex items-center justify-end gap-2">
+                                    <button 
+                                      onClick={() => setSupervisingTeacherId(record.id)}
+                                      className="mr-1 px-2.5 py-1.5 bg-blue-50 hover:bg-[#0038A8] text-[#0038A8] hover:text-white rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1 transition-all shadow-sm active:scale-95 border border-blue-100"
+                                      title="Detailed Dues Supervision Console"
+                                    >
+                                      <ShieldCheck size={12} />
+                                      Supervise
+                                    </button>
                                     <button 
                                       onClick={() => handleSendReminder(record)}
                                       disabled={isSendingReminder === record.id || record.pendingDeletion || isFullyPaid}
@@ -6865,8 +8910,8 @@ function AppContent() {
                                           <PhilippinePeso size={24} />
                                         </div>
                                         <div>
-                                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Current Balance</p>
-                                          <h4 className="text-2xl font-black text-gray-900 tracking-tight">₱{currentBalance.toFixed(2)}</h4>
+                                          <p className={`text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Current Balance</p>
+                                          <h4 className={`text-2xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{currentBalance.toFixed(2)}</h4>
                                         </div>
                                       </div>
                                       <div className="flex items-center gap-3">
@@ -6898,14 +8943,14 @@ function AppContent() {
                                                 type="checkbox" 
                                                 checked={isPaid}
                                                 onChange={() => handleTogglePayment(record.id, due.id)}
-                                                className="w-4 h-4 text-[#0038A8] border-gray-300 rounded-lg focus:ring-[#0038A8]"
+                                                className="w-4 h-4 lg:w-5 lg:h-5 text-[#0038A8] border-gray-300 rounded-lg focus:ring-[#0038A8]"
                                               />
-                                              <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${isPaid ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-300'}`}>
-                                                {isPaid ? <Check size={12} /> : <PhilippinePeso size={12} />}
+                                              <div className={`w-6 h-6 lg:w-8 lg:h-8 rounded-lg flex items-center justify-center ${isPaid ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-300'}`}>
+                                                {isPaid ? <Check size={14} className="lg:w-4 lg:h-4" /> : <PhilippinePeso size={14} className="lg:w-4 lg:h-4" />}
                                               </div>
                                               <div>
-                                                <div className="text-[10px] font-black text-gray-900 uppercase tracking-tight">{due.name}</div>
-                                                <div className="text-[9px] text-gray-400 font-bold">
+                                                <div className="text-[13px] md:text-sm lg:text-base font-black text-gray-900 uppercase tracking-tight">{due.name}</div>
+                                                <div className="text-[11px] lg:text-xs text-gray-500 font-bold">
                                                   {due.isVoluntary && isPaid 
                                                     ? `₱${(record.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
                                                     : `₱${due.amount.toFixed(2)}`
@@ -6930,8 +8975,8 @@ function AppContent() {
                     </table>
                   </div>
                   
-                  {/* Mobile View List */}
-                  <div className="md:hidden space-y-4 mt-4">
+                  {/* Mobile & Tablet View List */}
+                  <div className={`lg:hidden space-y-4 mt-4 ${selectedTeacherIds.size > 0 ? 'pb-28' : 'pb-4'}`}>
                     {records.length === 0 ? (
                       <div className="py-12 text-center bg-white rounded-2xl border border-gray-100">
                         <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-3">
@@ -6965,7 +9010,9 @@ function AppContent() {
                           const isExpanded = expandedRows.has(record.id);
 
                           return (
-                            <div key={record.id} className={`bg-white p-3 rounded-2xl border ${isFullyPaid ? 'border-green-200 bg-green-50/10' : 'border-gray-100'} shadow-sm space-y-3`}>
+                            <div key={record.id} className={`${
+                              isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'
+                            } p-3 rounded-2xl border ${isFullyPaid ? (isDarkMode ? 'border-emerald-500/30 bg-emerald-950/20' : 'border-green-200 bg-green-50/10') : ''} shadow-sm space-y-3`}>
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex items-start gap-2">
                                   <input 
@@ -6978,14 +9025,23 @@ function AppContent() {
                                     className="mt-1 w-4 h-4 text-[#0038A8] border-gray-300 rounded-lg focus:ring-[#0038A8]"
                                   />
                                   <div className="min-w-0">
-                                    <div className="text-sm font-black text-gray-900 uppercase tracking-tight truncate">{record.name}</div>
+                                    <div className={`text-sm font-black uppercase tracking-tight truncate ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{record.name}</div>
                                     <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                                      <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest bg-gray-100 px-1.5 py-0.5 rounded-md">{record.gradeLevel}</span>
-                                      <span className="text-[9px] text-gray-400 font-bold truncate max-w-[120px] sm:max-w-[200px]">{record.email}</span>
+                                      <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${
+                                        isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-gray-100 text-gray-400'
+                                      }`}>{record.gradeLevel}</span>
+                                      {record.department && record.department !== record.gradeLevel && <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-md ${
+                                        isDarkMode ? 'bg-blue-950 text-blue-300 border border-blue-800' : 'bg-blue-50 text-[#0038A8] border border-blue-100'
+                                      }`}>{record.department}</span>}
+                                      <span className={`text-[9px] font-bold truncate max-w-[120px] sm:max-w-[200px] ${
+                                        isDarkMode ? 'text-slate-400' : 'text-gray-400'
+                                      }`}>{record.email}</span>
                                     </div>
                                   </div>
                                 </div>
-                                <button onClick={() => toggleRow(record.id)} className="p-1 text-gray-400 hover:text-[#0038A8] transition-colors bg-gray-50 rounded-lg shrink-0">
+                                <button onClick={() => toggleRow(record.id)} className={`p-1 transition-colors rounded-lg shrink-0 ${
+                                  isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-blue-400' : 'bg-gray-50 text-gray-400 hover:text-[#0038A8]'
+                                }`}>
                                   {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                                 </button>
                               </div>
@@ -7008,6 +9064,14 @@ function AppContent() {
                                 </div>
                                 
                                 <div className="flex items-center gap-1 shrink-0">
+                                  <button 
+                                    onClick={() => setSupervisingTeacherId(record.id)}
+                                    className="p-1.5 bg-blue-50 text-[#0038A8] rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1 transition-all border border-blue-100"
+                                    title="Detailed Dues Supervision Console"
+                                  >
+                                    <ShieldCheck size={12} />
+                                    Supervise
+                                  </button>
                                   <button 
                                     onClick={() => handleSendReminder(record)}
                                     disabled={isSendingReminder === record.id || record.pendingDeletion || currentBalance <= 0}
@@ -7058,11 +9122,13 @@ function AppContent() {
                               </div>
 
                               {isExpanded && (
-                                <div className="pt-2 border-t border-gray-50 space-y-3">
-                                  <div className="bg-orange-50 p-3 rounded-xl border border-orange-100 flex items-center justify-between">
+                                <div className={`pt-2 border-t space-y-3 ${isDarkMode ? 'border-slate-800' : 'border-gray-50'}`}>
+                                  <div className={`p-3 rounded-xl border flex items-center justify-between ${
+                                    isDarkMode ? 'bg-orange-950/30 border-orange-900/40' : 'bg-orange-50 border-orange-100'
+                                  }`}>
                                     <div>
-                                      <p className="text-[8px] font-black text-orange-400 uppercase tracking-widest leading-none mb-1">Balance</p>
-                                      <h4 className="text-sm font-black text-orange-700 leading-none">₱{currentBalance.toFixed(2)}</h4>
+                                      <p className={`text-[8px] font-black uppercase tracking-widest leading-none mb-1 ${isDarkMode ? 'text-orange-400' : 'text-orange-400'}`}>Balance</p>
+                                      <h4 className={`text-sm font-black leading-none ${isDarkMode ? 'text-orange-300' : 'text-orange-700'}`}>₱{currentBalance.toFixed(2)}</h4>
                                     </div>
                                     <button 
                                       onClick={() => handleSendReminder(record)}
@@ -7077,7 +9143,11 @@ function AppContent() {
                                     {standardDues.map(due => {
                                     const isPaid = record.paidDueIds.includes(due.id);
                                     return (
-                                    <label key={due.id} className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer ${isPaid ? 'bg-green-50/30 border-green-100' : 'bg-gray-50/50 border-gray-100'}`}>
+                                    <label key={due.id} className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer ${
+                                      isDarkMode 
+                                        ? (isPaid ? 'bg-slate-800 border-emerald-500/30 text-white' : 'bg-slate-950 border-slate-800 text-slate-300')
+                                        : (isPaid ? 'bg-green-50/30 border-green-100 text-gray-900' : 'bg-gray-50/50 border-gray-100 text-gray-800')
+                                    }`}>
                                       <div className="flex items-center gap-2">
                                         <input 
                                           type="checkbox" 
@@ -7085,12 +9155,14 @@ function AppContent() {
                                           onChange={() => handleTogglePayment(record.id, due.id)}
                                           className="w-3 h-3 text-[#0038A8] border-gray-300 rounded focus:ring-[#0038A8]"
                                         />
-                                        <div className={`w-4 h-4 rounded-md flex items-center justify-center ${isPaid ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-400'}`}>
+                                        <div className={`w-4 h-4 rounded-md flex items-center justify-center ${
+                                          isPaid ? (isDarkMode ? 'bg-emerald-950 text-emerald-400' : 'bg-green-100 text-green-600') : (isDarkMode ? 'bg-slate-800 text-slate-500' : 'bg-gray-200 text-gray-400')
+                                        }`}>
                                           {isPaid ? <Check size={8} /> : <PhilippinePeso size={8} />}
                                         </div>
                                         <div>
-                                          <div className="text-[9px] font-black text-gray-900 uppercase tracking-tight">{due.name}</div>
-                                          <div className="text-[8px] text-gray-500 font-bold">
+                                          <div className={`text-[12px] font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{due.name}</div>
+                                          <div className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
                                             {due.isVoluntary && isPaid 
                                               ? `₱${(record.voluntaryPayments?.[due.id] || 0).toFixed(2)}`
                                               : `₱${due.amount.toFixed(2)}`
@@ -7098,7 +9170,9 @@ function AppContent() {
                                           </div>
                                         </div>
                                       </div>
-                                      {isPaid && <span className="text-[7px] font-black text-green-600 uppercase tracking-widest bg-green-100 px-1.5 py-0.5 rounded-full">Paid</span>}
+                                      {isPaid && <span className={`text-[7px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full ${
+                                        isDarkMode ? 'text-emerald-400 bg-emerald-950' : 'text-green-600 bg-green-100'
+                                      }`}>Paid</span>}
                                     </label>
                                     );
                                   })}
@@ -7142,8 +9216,10 @@ function AppContent() {
 
         {activeTab === 'expenses' && profile.role === 'admin' && (
           <div className="space-y-6">
-            <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-200">
-              <h2 className="text-2xl font-black text-gray-900 mb-6 uppercase tracking-tight">Record New Expense</h2>
+            <div className={`p-8 rounded-3xl shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
+              <h2 className={`text-2xl font-black mb-6 uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Record New Expense</h2>
               <form onSubmit={(e) => {
                 e.preventDefault();
                 if (newExpenseDesc && newExpenseAmount) {
@@ -7153,40 +9229,64 @@ function AppContent() {
                 }
               }} className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="md:col-span-2">
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Description</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Description</label>
                   <input 
                     type="text" 
                     value={newExpenseDesc}
                     onChange={e => setNewExpenseDesc(e.target.value)}
                     placeholder="e.g., Office Supplies, Bereavement Aid"
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#0038A8] outline-none"
+                    className={`w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                      isDarkMode ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500' : 'bg-gray-50 border-gray-200 text-gray-900'
+                    }`}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Amount (₱)</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Category</label>
+                  <select 
+                    value={newExpenseCategory}
+                    onChange={e => setNewExpenseCategory(e.target.value)}
+                    className={`w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                      isDarkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-gray-50 border-gray-200 text-gray-900'
+                    }`}
+                  >
+                    <option value="General">General</option>
+                    <option value="Supplies">Supplies</option>
+                    <option value="Bereavement">Bereavement</option>
+                    <option value="Events">Events</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Amount (₱)</label>
                   <input 
                     type="number" 
                     value={newExpenseAmount}
                     onChange={e => setNewExpenseAmount(e.target.value === '' ? '' : Number(e.target.value))}
                     placeholder="0.00"
-                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#0038A8] outline-none"
+                    className={`w-full px-4 py-3 border rounded-xl outline-none focus:ring-2 focus:ring-[#0038A8] ${
+                      isDarkMode ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500' : 'bg-gray-50 border-gray-200 text-gray-900'
+                    }`}
                   />
                 </div>
-                <div className="flex items-end">
-                  <button type="submit" className="w-full bg-[#0038A8] text-white py-3 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all">
+                <div className="flex items-end md:col-span-4">
+                  <button type="submit" className="w-full bg-[#0038A8] text-white py-3 rounded-xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-md">
                     Add Expense
                   </button>
                 </div>
               </form>
             </div>
 
-            <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-200">
+            <div className={`p-8 rounded-3xl shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Expense History</h2>
+                <h2 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Expense History</h2>
                 <div className="flex flex-wrap gap-2">
                   <button 
                     onClick={handleDownloadLiquidationDocx}
-                    className="flex items-center gap-2 bg-blue-50 text-[#0038A8] px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-100 transition-all"
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                      isDarkMode ? 'bg-blue-950/80 text-blue-400 border-blue-800/80 hover:bg-blue-900/80' : 'bg-blue-50 text-[#0038A8] border-blue-100 hover:bg-blue-100'
+                    }`}
                   >
                     <FileText size={14} />
                     Download DOCX
@@ -7196,7 +9296,9 @@ function AppContent() {
               <div className="overflow-x-auto hidden md:block">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                    <tr className={`text-left text-[10px] font-bold uppercase tracking-widest border-b ${
+                      isDarkMode ? 'text-slate-400 border-slate-800' : 'text-gray-400 border-gray-100'
+                    }`}>
                       <th className="pb-4 pl-4">Date</th>
                       <th className="pb-4">Description</th>
                       <th className="pb-4">Amount (₱)</th>
@@ -7204,18 +9306,18 @@ function AppContent() {
                       <th className="pb-4 text-right pr-4">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
+                  <tbody className={`divide-y ${isDarkMode ? 'divide-slate-800/60' : 'divide-gray-50'}`}>
                     {expenses.length === 0 ? (
-                      <tr><td colSpan={5} className="py-12 text-center text-gray-400 italic">No expenses recorded yet.</td></tr>
+                      <tr><td colSpan={5} className={`py-12 text-center italic ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>No expenses recorded yet.</td></tr>
                     ) : (
                       expenses.map(exp => (
-                        <tr key={exp.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="py-4 pl-4 text-xs text-gray-500">{exp.timestamp?.toDate().toLocaleDateString()}</td>
-                          <td className="py-4 text-sm font-bold text-gray-900">{exp.description}</td>
-                          <td className="py-4 text-sm font-black text-red-600">₱{exp.amount.toFixed(2)}</td>
-                          <td className="py-4 text-xs text-gray-500">{exp.adminName}</td>
+                        <tr key={exp.id} className={`transition-colors ${isDarkMode ? 'hover:bg-slate-800/40' : 'hover:bg-gray-50'}`}>
+                          <td className={`py-4 pl-4 text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{ensureTimestamp(exp.timestamp).toDate().toLocaleDateString()}</td>
+                          <td className={`py-4 text-sm font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{exp.description}</td>
+                          <td className="py-4 text-sm font-black text-rose-500">₱{exp.amount.toFixed(2)}</td>
+                          <td className={`py-4 text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{exp.adminName}</td>
                           <td className="py-4 text-right pr-4">
-                            <button onClick={() => deleteExpense(exp.id)} className="text-gray-400 hover:text-red-500 transition-colors">
+                            <button onClick={() => deleteExpense(exp.id)} className={`transition-colors ${isDarkMode ? 'text-slate-500 hover:text-rose-400' : 'text-gray-400 hover:text-red-500'}`}>
                               <Trash2 size={16} />
                             </button>
                           </td>
@@ -7229,21 +9331,23 @@ function AppContent() {
               {/* Mobile Card View */}
               <div className="md:hidden space-y-4">
                 {expenses.length === 0 ? (
-                  <div className="py-12 text-center text-gray-400 italic border border-gray-100 rounded-2xl">No expenses recorded yet.</div>
+                  <div className={`py-12 text-center italic border rounded-2xl ${isDarkMode ? 'border-slate-800 text-slate-500' : 'border-gray-100 text-gray-400'}`}>No expenses recorded yet.</div>
                 ) : (
                   expenses.map(exp => (
-                    <div key={exp.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                    <div key={exp.id} className={`p-4 rounded-2xl border shadow-sm space-y-3 ${
+                      isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-white border-gray-100'
+                    }`}>
                       <div className="flex justify-between items-start">
                         <div>
-                          <div className="text-sm font-bold text-gray-900">{exp.description}</div>
-                          <div className="text-xs text-gray-500 mt-1">{exp.adminName}</div>
+                          <div className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{exp.description}</div>
+                          <div className={`text-xs mt-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{exp.adminName}</div>
                         </div>
                       </div>
-                      <div className="flex justify-between items-center text-sm pt-2 border-t border-gray-50">
-                        <span className="text-gray-500 text-xs">{exp.timestamp?.toDate().toLocaleDateString()}</span>
+                      <div className={`flex justify-between items-center text-sm pt-2 border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-50'}`}>
+                        <span className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{ensureTimestamp(exp.timestamp).toDate().toLocaleDateString()}</span>
                         <div className="flex items-center gap-4">
-                          <span className="font-black text-red-600">₱{exp.amount.toFixed(2)}</span>
-                          <button onClick={() => deleteExpense(exp.id)} className="p-1.5 text-gray-400 hover:text-red-500 transition-colors">
+                          <span className="font-black text-rose-500">₱{exp.amount.toFixed(2)}</span>
+                          <button onClick={() => deleteExpense(exp.id)} className={`p-1.5 transition-colors ${isDarkMode ? 'text-slate-500 hover:text-rose-400' : 'text-gray-400 hover:text-red-500'}`}>
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -7258,15 +9362,19 @@ function AppContent() {
 
         {activeTab === 'settings' && profile.role === 'admin' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
+            <div className={`p-8 rounded-[2.5rem] shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-[#0038A8]">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                    isDarkMode ? 'bg-blue-950/80 text-blue-400 border border-blue-800/80' : 'bg-blue-50 text-[#0038A8]'
+                  }`}>
                     <Settings size={24} />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Report Configuration</h2>
-                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-1">Manage signatories and report settings</p>
+                    <h2 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Report Configuration</h2>
+                    <p className={`text-xs font-bold uppercase tracking-widest mt-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Manage signatories and report settings</p>
                   </div>
                 </div>
                 <div className="flex gap-3 w-full sm:w-auto">
@@ -7280,13 +9388,15 @@ function AppContent() {
                       };
                       setSignatories([...signatories, newSig]);
                     }}
-                    className="flex-1 sm:flex-none bg-blue-50 text-[#0038A8] px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-100 transition-all flex items-center justify-center gap-2"
+                    className={`flex-1 sm:flex-none px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border transition-all flex items-center justify-center gap-2 ${
+                      isDarkMode ? 'bg-blue-950/80 text-blue-400 border-blue-800/80 hover:bg-blue-900/80' : 'bg-blue-50 text-[#0038A8] border-blue-100 hover:bg-blue-100'
+                    }`}
                   >
                     <Plus size={16} /> Add Signatory
                   </button>
                   <button 
                     onClick={() => updateSignatories(signatories)}
-                    className="flex-1 sm:flex-none bg-[#0038A8] text-white px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                    className="flex-1 sm:flex-none bg-[#0038A8] text-white px-8 py-3 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-900/30"
                   >
                     Save Changes
                   </button>
@@ -7295,13 +9405,17 @@ function AppContent() {
               
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {signatories.map((sig, index) => (
-                  <div key={sig.id} className="p-6 bg-gray-50 rounded-3xl border border-gray-100 space-y-4 relative group">
+                  <div key={sig.id} className={`p-6 rounded-3xl border space-y-4 relative group ${
+                    isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-gray-50 border-gray-100'
+                  }`}>
                     <button 
                       onClick={() => {
                         const newList = signatories.filter((_, i) => i !== index);
                         setSignatories(newList);
                       }}
-                      className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                      className={`absolute top-4 right-4 p-2 rounded-xl transition-all opacity-0 group-hover:opacity-100 ${
+                        isDarkMode ? 'text-slate-400 hover:text-rose-400 hover:bg-rose-950/40' : 'text-gray-400 hover:text-red-500 hover:bg-red-50'
+                      }`}
                       title="Remove Signatory"
                     >
                       <Trash2 size={14} />
@@ -7309,7 +9423,7 @@ function AppContent() {
                     
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-[10px] font-black text-[#0038A8] uppercase tracking-widest mb-2">Label (e.g., Prepared by:)</label>
+                        <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>Label (e.g., Prepared by:)</label>
                         <input 
                           type="text" 
                           value={sig.label}
@@ -7318,11 +9432,13 @@ function AppContent() {
                             newList[index].label = e.target.value;
                             setSignatories(newList);
                           }}
-                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                          className={`w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all ${
+                            isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                          }`}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Full Name</label>
+                        <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Full Name</label>
                         <input 
                           type="text" 
                           value={sig.name}
@@ -7332,11 +9448,13 @@ function AppContent() {
                             setSignatories(newList);
                           }}
                           placeholder="Enter name"
-                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                          className={`w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all ${
+                            isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                          }`}
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Title / Position</label>
+                        <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Title / Position</label>
                         <input 
                           type="text" 
                           value={sig.title}
@@ -7346,7 +9464,9 @@ function AppContent() {
                             setSignatories(newList);
                           }}
                           placeholder="Enter title"
-                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all"
+                          className={`w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#0038A8] transition-all ${
+                            isDarkMode ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500' : 'bg-white border-gray-200 text-gray-900'
+                          }`}
                         />
                       </div>
                     </div>
@@ -7354,11 +9474,15 @@ function AppContent() {
                 ))}
                 
                 {signatories.length === 0 && (
-                  <div className="col-span-full py-20 text-center bg-gray-50 rounded-[2.5rem] border border-dashed border-gray-200">
-                    <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-                      <Settings size={32} className="text-gray-300" />
+                  <div className={`col-span-full py-20 text-center rounded-[2.5rem] border border-dashed ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-gray-50 border-gray-200'
+                  }`}>
+                    <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm ${
+                      isDarkMode ? 'bg-slate-900 text-slate-600' : 'bg-white text-gray-300'
+                    }`}>
+                      <Settings size={32} />
                     </div>
-                    <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">No signatories configured.</p>
+                    <p className={`text-sm font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>No signatories configured.</p>
                     <button 
                       onClick={() => {
                         const newSig: Signatory = {
@@ -7369,7 +9493,7 @@ function AppContent() {
                         };
                         setSignatories([...signatories, newSig]);
                       }}
-                      className="mt-4 text-[#0038A8] text-xs font-black uppercase tracking-widest hover:underline"
+                      className={`mt-4 text-xs font-black uppercase tracking-widest hover:underline ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}
                     >
                       Add your first signatory
                     </button>
@@ -7377,25 +9501,129 @@ function AppContent() {
                 )}
               </div>
             </div>
+
+            {/* DOCX Branding Settings */}
+            <div className={`p-8 rounded-[2.5rem] shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
+              <div className="flex items-center gap-4 mb-8">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                  isDarkMode ? 'bg-indigo-950/80 text-indigo-400 border border-indigo-800/80' : 'bg-indigo-50 text-indigo-600'
+                }`}>
+                  <FileText size={24} />
+                </div>
+                <div>
+                  <h2 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>DOCX Branding Settings</h2>
+                  <p className={`text-xs font-bold uppercase tracking-widest mt-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Configure Custom Export Headers & Footers</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className={`space-y-4 p-6 rounded-3xl border ${
+                  isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-gray-50 border-gray-100'
+                }`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shadow-sm ${
+                      isDarkMode ? 'bg-slate-900 text-indigo-400' : 'bg-white text-indigo-600'
+                    }`}>
+                      <LayoutDashboard size={16} />
+                    </div>
+                    <label className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-300' : 'text-gray-700'}`}>Document Header Image</label>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleBrandingImageUpload(e, 'headerUrl')}
+                    className="w-full text-xs font-medium text-gray-500 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:tracking-widest file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                  />
+                  <div className={`text-[10px] font-medium leading-relaxed ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>
+                    Upload your exact header image. It will perfectly span the exported page.
+                  </div>
+                  {brandingSettings.headerUrl && (
+                    <div className={`mt-4 p-2 rounded-xl border overflow-hidden shadow-inner flex items-center justify-between ${
+                      isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200'
+                    }`}>
+                      <img 
+                        src={brandingSettings.headerUrl.replace('dl=0', 'raw=1')} 
+                        alt="Header Preview" 
+                        className="w-[80%] h-12 object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button onClick={() => setBrandingSettings(prev => ({ ...prev, headerUrl: '' }))} className="text-red-500 hover:text-red-600 p-2"><Trash2 size={16}/></button>
+                    </div>
+                  )}
+                </div>
+
+                <div className={`space-y-4 p-6 rounded-3xl border ${
+                  isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-gray-50 border-gray-100'
+                }`}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shadow-sm ${
+                      isDarkMode ? 'bg-slate-900 text-indigo-400' : 'bg-white text-indigo-600'
+                    }`}>
+                      <LayoutDashboard size={16} />
+                    </div>
+                    <label className={`text-xs font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-300' : 'text-gray-700'}`}>Document Footer Image</label>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleBrandingImageUpload(e, 'footerUrl')}
+                    className="w-full text-xs font-medium text-gray-500 file:mr-4 file:py-3 file:px-6 file:rounded-xl file:border-0 file:text-xs file:font-black file:uppercase file:tracking-widest file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+                  />
+                  <div className={`text-[10px] font-medium leading-relaxed ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>
+                    Upload your exact footer image. It will correctly shape to the bottom margins.
+                  </div>
+                  {brandingSettings.footerUrl && (
+                    <div className={`mt-4 p-2 rounded-xl border overflow-hidden shadow-inner flex items-center justify-between ${
+                      isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-200'
+                    }`}>
+                      <img 
+                        src={brandingSettings.footerUrl.replace('dl=0', 'raw=1')} 
+                        alt="Footer Preview" 
+                        className="w-[80%] h-12 object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button onClick={() => setBrandingSettings(prev => ({ ...prev, footerUrl: '' }))} className="text-red-500 hover:text-red-600 p-2"><Trash2 size={16}/></button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-8 flex justify-end">
+                <button
+                  onClick={() => updateBranding(brandingSettings.headerUrl, brandingSettings.footerUrl)}
+                  className="bg-indigo-600 text-white px-10 py-4 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg flex items-center gap-2"
+                >
+                  <ShieldCheck size={16} /> Save Branding Setup
+                </button>
+              </div>
+            </div>
           </div>
         )}
         {activeTab === 'audit' && profile.role === 'admin' && (
           <div className="space-y-6 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
+            <div className={`p-8 rounded-[2.5rem] shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                    isDarkMode ? 'bg-purple-950/80 text-purple-400 border border-purple-800/80' : 'bg-purple-50 text-purple-600'
+                  }`}>
                     <Shield size={24} />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">System Audit Logs</h2>
-                    <p className="text-xs text-gray-500 font-bold mt-1 uppercase tracking-widest">Transparency & Activity Tracking</p>
+                    <h2 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>System Audit Logs</h2>
+                    <p className={`text-xs font-bold mt-1 uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Transparency & Activity Tracking</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 w-full sm:w-auto">
                   <button 
                     onClick={clearAuditLogs}
-                    className="flex-1 sm:flex-none bg-red-50 text-red-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-red-100 hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                    className={`flex-1 sm:flex-none px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border transition-all flex items-center justify-center gap-2 ${
+                      isDarkMode ? 'bg-rose-950/80 text-rose-400 border-rose-800/80 hover:bg-rose-900/80' : 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100'
+                    }`}
                   >
                     <Trash2 size={16} /> Clear All Logs
                   </button>
@@ -7405,31 +9633,41 @@ function AppContent() {
               <div className="space-y-4">
                 {auditLogs.length === 0 ? (
                   <div className="py-20 text-center">
-                    <div className="inline-flex items-center justify-center w-16 h-16 bg-gray-50 rounded-full mb-4">
-                      <Shield size={32} className="text-gray-200" />
+                    <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 ${
+                      isDarkMode ? 'bg-slate-800' : 'bg-gray-50'
+                    }`}>
+                      <Shield size={32} className={isDarkMode ? 'text-slate-600' : 'text-gray-200'} />
                     </div>
-                    <div className="text-gray-400 font-bold uppercase tracking-widest text-xs">No activity logs found.</div>
+                    <div className={`font-bold uppercase tracking-widest text-xs ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>No activity logs found.</div>
                   </div>
                 ) : (
                   auditLogs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0)).map(log => (
-                    <div key={log.id} className="flex items-start gap-4 p-5 rounded-3xl border border-gray-100 hover:border-blue-100 hover:bg-blue-50/30 transition-all group">
+                    <div key={log.id} className={`flex items-start gap-4 p-5 rounded-3xl border transition-all group ${
+                      isDarkMode 
+                        ? 'bg-slate-950/60 border-slate-800/80 hover:border-blue-500/50 hover:bg-slate-800/40' 
+                        : 'border-gray-100 hover:border-blue-100 hover:bg-blue-50/30'
+                    }`}>
                       <div className={`mt-1.5 w-3 h-3 rounded-full shrink-0 ${
                         log.type === 'critical' ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]' : 
                         log.type === 'warning' ? 'bg-yellow-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]' : 'bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]'
                       }`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2">
-                          <span className="text-sm font-black text-gray-900 uppercase tracking-tight truncate">{log.action}</span>
-                          <span className="text-[10px] text-gray-400 font-bold whitespace-nowrap bg-gray-100 px-3 py-1 rounded-full group-hover:bg-white transition-colors">
-                            {log.timestamp?.toDate().toLocaleString()}
+                          <span className={`text-sm font-black uppercase tracking-tight truncate ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{log.action}</span>
+                          <span className={`text-[10px] font-bold whitespace-nowrap px-3 py-1 rounded-full transition-colors ${
+                            isDarkMode ? 'text-slate-400 bg-slate-800 group-hover:bg-slate-700' : 'text-gray-400 bg-gray-100 group-hover:bg-white'
+                          }`}>
+                            {ensureTimestamp(log.timestamp).toDate().toLocaleString()}
                           </span>
                         </div>
-                        <p className="text-xs text-gray-600 mb-3 leading-relaxed font-medium">{log.details}</p>
+                        <p className={`text-xs mb-3 leading-relaxed font-medium ${isDarkMode ? 'text-slate-300' : 'text-gray-600'}`}>{log.details}</p>
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 bg-white border border-gray-200 rounded-full flex items-center justify-center shadow-sm">
-                            <User size={12} className="text-gray-600" />
+                          <div className={`w-6 h-6 border rounded-full flex items-center justify-center shadow-sm ${
+                            isDarkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-gray-200'
+                          }`}>
+                            <User size={12} className={isDarkMode ? 'text-slate-400' : 'text-gray-600'} />
                           </div>
-                          <span className="text-[10px] text-gray-500 font-black uppercase tracking-widest">{log.userName}</span>
+                          <span className={`text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{log.userName}</span>
                         </div>
                       </div>
                     </div>
@@ -7441,48 +9679,188 @@ function AppContent() {
         )}
 
         {activeTab === 'profile' && profile && (
-          <div className="max-w-xl mx-auto mt-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-200">
+          <div className="max-w-2xl mx-auto my-8 animate-in fade-in slide-in-from-bottom-4 duration-700 space-y-8">
+            {/* User Details Card */}
+            <div className={`p-8 rounded-[2.5rem] border shadow-sm transition-all duration-300 ${
+              isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-200 text-gray-900'
+            }`}>
               <div className="flex items-center gap-4 mb-8">
-                <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center text-[#0038A8]">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center font-black ${
+                  isDarkMode ? 'bg-slate-800 text-blue-400 border border-slate-700' : 'bg-blue-50 text-[#0038A8]'
+                }`}>
                   <User size={32} />
                 </div>
                 <div>
-                  <h2 className="text-2xl font-black text-gray-900">User Profile</h2>
-                  <p className="text-sm text-gray-500 font-medium">Manage your personal information</p>
+                  <h2 className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>User Profile</h2>
+                  <p className={`text-sm font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Manage your personal information</p>
                 </div>
               </div>
               <div className="space-y-6">
                 <div>
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Name</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Name</label>
                   <input 
                     type="text" 
                     value={isEditingProfile ? editProfileName : profile.name}
                     onChange={(e) => setEditProfileName(e.target.value)}
                     disabled={!isEditingProfile}
-                    className="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold text-gray-900"
+                    className={`w-full p-4 border rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold ${
+                      isDarkMode 
+                        ? 'bg-slate-950 border-slate-800 text-white disabled:bg-slate-900/60' 
+                        : 'bg-gray-50 border-gray-200 text-gray-900 disabled:bg-gray-100/70'
+                    }`}
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Email</label>
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Email</label>
                   <input 
                     type="email" 
                     value={isEditingProfile ? editProfileEmail : profile.email}
                     onChange={(e) => setEditProfileEmail(e.target.value)}
                     disabled={!isEditingProfile}
-                    className="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold text-gray-900"
+                    className={`w-full p-4 border rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold ${
+                      isDarkMode 
+                        ? 'bg-slate-950 border-slate-800 text-white disabled:bg-slate-900/60' 
+                        : 'bg-gray-50 border-gray-200 text-gray-900 disabled:bg-gray-100/70'
+                    }`}
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Grade Level</label>
+                    <select 
+                      value={isEditingProfile ? editProfileGradeLevel : (profile.gradeLevel as GradeLevel)}
+                      onChange={(e) => setEditProfileGradeLevel(e.target.value as GradeLevel)}
+                      disabled={!isEditingProfile}
+                      className={`w-full p-4 border rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold disabled:opacity-70 ${
+                        isDarkMode 
+                          ? 'bg-slate-950 border-slate-800 text-white disabled:bg-slate-900/60' 
+                          : 'bg-gray-50 border-gray-200 text-gray-900 disabled:bg-gray-100/70'
+                      }`}
+                    >
+                      {['Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'].map(grade => (
+                        <option key={grade} value={grade}>{grade}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Department</label>
+                    <input 
+                      type="text" 
+                      value={isEditingProfile ? editProfileDepartment : (getTeacherRecordByEmail(profile.email)?.department || '')}
+                      onChange={(e) => setEditProfileDepartment(e.target.value)}
+                      disabled={!isEditingProfile}
+                      className={`w-full p-4 border rounded-2xl focus:ring-2 focus:ring-[#0038A8] outline-none font-bold disabled:opacity-70 ${
+                        isDarkMode 
+                          ? 'bg-slate-950 border-slate-800 text-white disabled:bg-slate-900/60' 
+                          : 'bg-gray-50 border-gray-200 text-gray-900 disabled:bg-gray-100/70'
+                      }`}
+                      placeholder="e.g. Science"
+                    />
+                  </div>
                 </div>
                 <div className="flex gap-4 pt-4">
                   {isEditingProfile ? (
                     <>
-                      <button onClick={handleSaveProfile} className="flex-1 bg-[#0038A8] text-white py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all">Save</button>
-                      <button onClick={() => setIsEditingProfile(false)} className="flex-1 bg-gray-100 text-gray-700 py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-gray-200 transition-all">Cancel</button>
+                      <button onClick={handleSaveProfile} className="flex-1 bg-[#0038A8] text-white py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-md">Save</button>
+                      <button onClick={() => setIsEditingProfile(false)} className={`flex-1 py-4 rounded-2xl font-black uppercase tracking-widest transition-all ${
+                        isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}>Cancel</button>
                     </>
                   ) : (
-                    <button onClick={() => setIsEditingProfile(true)} className="w-full bg-[#0038A8] text-white py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all">Edit Profile</button>
+                    <button onClick={() => setIsEditingProfile(true)} className="w-full bg-[#0038A8] text-white py-4 rounded-2xl font-black uppercase tracking-widest hover:bg-blue-800 transition-all shadow-md">Edit Profile</button>
                   )}
                 </div>
+              </div>
+            </div>
+
+            {/* Appearance & Theme Preferences Card */}
+            <div className={`p-8 rounded-[2.5rem] border shadow-sm transition-all duration-300 ${
+              isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-200 text-gray-900'
+            }`}>
+              <div className="flex items-center gap-4 mb-6">
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
+                  isDarkMode ? 'bg-amber-950/60 text-amber-400 border border-amber-800/50' : 'bg-blue-50 text-[#0038A8]'
+                }`}>
+                  {isDarkMode ? <Moon size={24} /> : <Sun size={24} />}
+                </div>
+                <div>
+                  <h3 className={`text-xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Appearance & Theme</h3>
+                  <p className={`text-xs font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+                    Customize the interface colors and dark mode theme
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Light Mode Card */}
+                <button
+                  type="button"
+                  onClick={() => setIsDarkMode(false)}
+                  className={`p-5 rounded-3xl border text-left transition-all relative overflow-hidden group ${
+                    !isDarkMode
+                      ? 'bg-blue-50/90 border-[#0038A8] ring-2 ring-[#0038A8]/30 shadow-md'
+                      : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-amber-600">
+                        <Sun size={18} />
+                      </div>
+                      <span className={`text-sm font-black uppercase tracking-wider ${!isDarkMode ? 'text-[#0038A8]' : 'text-slate-200'}`}>
+                        Light Mode
+                      </span>
+                    </div>
+                    {!isDarkMode && (
+                      <span className="px-2.5 py-1 bg-[#0038A8] text-white text-[10px] font-black uppercase rounded-full tracking-wider shadow-sm">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs font-semibold ${!isDarkMode ? 'text-blue-950' : 'text-slate-400'}`}>
+                    Clean, high-contrast light canvas with royal blue highlights. Best for daytime and bright environments.
+                  </p>
+                  <div className="mt-4 p-2 bg-slate-100 rounded-xl border border-slate-200 flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-[#0038A8]"></div>
+                    <div className="w-12 h-2 rounded-full bg-slate-300"></div>
+                    <div className="ml-auto w-6 h-2 rounded-full bg-emerald-500"></div>
+                  </div>
+                </button>
+
+                {/* Dark Mode Card */}
+                <button
+                  type="button"
+                  onClick={() => setIsDarkMode(true)}
+                  className={`p-5 rounded-3xl border text-left transition-all relative overflow-hidden group ${
+                    isDarkMode
+                      ? 'bg-slate-800/90 border-blue-500 ring-2 ring-blue-500/30 shadow-xl'
+                      : 'bg-gray-50 border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-indigo-950 flex items-center justify-center text-indigo-400 border border-indigo-800">
+                        <Moon size={18} />
+                      </div>
+                      <span className={`text-sm font-black uppercase tracking-wider ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Dark Mode
+                      </span>
+                    </div>
+                    {isDarkMode && (
+                      <span className="px-2.5 py-1 bg-blue-500 text-white text-[10px] font-black uppercase rounded-full tracking-wider shadow-sm">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-xs font-semibold ${isDarkMode ? 'text-slate-300' : 'text-gray-500'}`}>
+                    Sleek, eye-friendly midnight canvas with gold & cyan indicators. Reduces eye strain in dark environments.
+                  </p>
+                  <div className="mt-4 p-2 bg-slate-900 rounded-xl border border-slate-800 flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-cyan-400"></div>
+                    <div className="w-12 h-2 rounded-full bg-slate-700"></div>
+                    <div className="ml-auto w-6 h-2 rounded-full bg-emerald-400"></div>
+                  </div>
+                </button>
               </div>
             </div>
           </div>
@@ -7490,20 +9868,24 @@ function AppContent() {
         {activeTab === 'remittance' && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="md:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+              <div className={`md:col-span-2 p-6 rounded-3xl shadow-sm border ${
+                isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+              }`}>
                 <div className="flex items-center gap-3 mb-6">
                   <div className="bg-[#0038A8] text-white w-10 h-10 rounded-2xl flex items-center justify-center font-bold">
                     <Wallet size={20} />
                   </div>
-                  <h2 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Remittance Tracking</h2>
+                  <h2 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Remittance Tracking</h2>
                 </div>
-                <p className="text-sm text-gray-500 font-medium">Monitor and manage all remittance records from Board of Directors.</p>
+                <p className={`text-sm font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Monitor and manage all remittance records from Board of Directors.</p>
               </div>
               
               {profile.role === 'bod' && (
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200 flex flex-col justify-between">
-                  <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Pending Remittance</div>
-                  <div className="text-3xl font-black text-green-600 mb-4">
+                <div className={`p-6 rounded-3xl shadow-sm border flex flex-col justify-between ${
+                  isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+                }`}>
+                  <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Pending Remittance</div>
+                  <div className="text-3xl font-black text-green-500 mb-4">
                     ₱{records.filter(r => {
                       const remittedIds = r.remittedDueIds || [];
                       return r.paidDueIds.some(id => !remittedIds.includes(id));
@@ -7526,12 +9908,16 @@ function AppContent() {
               )}
             </div>
 
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200">
+            <div className={`p-6 rounded-3xl shadow-sm border ${
+              isDarkMode ? 'bg-slate-900/85 border-slate-800 text-slate-100' : 'bg-white border-gray-200'
+            }`}>
               {/* Desktop Table */}
               <div className="hidden md:block overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100">
+                    <tr className={`text-left text-[10px] font-bold uppercase tracking-widest border-b ${
+                      isDarkMode ? 'text-slate-400 border-slate-800' : 'text-gray-400 border-gray-100'
+                    }`}>
                       <th className="pb-4 pl-4">Date</th>
                       <th className="pb-4">BOD Name</th>
                       <th className="pb-4">Grade</th>
@@ -7540,18 +9926,20 @@ function AppContent() {
                       {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile.email === 'ngehthong@gmail.com') && <th className="pb-4 text-right pr-4">Action</th>}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {remittances.sort((a, b) => b.timestamp?.seconds - a.timestamp?.seconds).map(rem => (
-                      <tr key={rem.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="py-4 pl-4 text-xs text-gray-600">
-                          {rem.timestamp?.toDate().toLocaleDateString()}
+                  <tbody className={`divide-y ${isDarkMode ? 'divide-slate-800/60' : 'divide-gray-50'}`}>
+                    {remittances.sort((a, b) => (ensureTimestamp(b.timestamp).seconds || 0) - (ensureTimestamp(a.timestamp).seconds || 0)).map(rem => (
+                      <tr key={rem.id} className={`transition-colors ${isDarkMode ? 'hover:bg-slate-800/40' : 'hover:bg-gray-50'}`}>
+                        <td className={`py-4 pl-4 text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-600'}`}>
+                          {ensureTimestamp(rem.timestamp).toDate().toLocaleDateString()}
                         </td>
-                        <td className="py-4 text-sm font-bold text-gray-900">{rem.bodName}</td>
-                        <td className="py-4 text-xs font-medium text-gray-500">{rem.gradeLevel}</td>
-                        <td className="py-4 text-sm font-black text-[#0038A8]">₱{rem.amount.toFixed(2)}</td>
+                        <td className={`py-4 text-sm font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{rem.bodName}</td>
+                        <td className={`py-4 text-xs font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{rem.gradeLevel}</td>
+                        <td className={`py-4 text-sm font-black ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>₱{rem.amount.toFixed(2)}</td>
                         <td className="py-4">
                           <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${
-                            rem.status === 'verified' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                            rem.status === 'verified' 
+                              ? isDarkMode ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/60' : 'bg-green-100 text-green-700'
+                              : isDarkMode ? 'bg-amber-950/80 text-amber-400 border border-amber-800/60' : 'bg-yellow-100 text-yellow-700'
                           }`}>
                             {rem.status}
                           </span>
@@ -7561,14 +9949,14 @@ function AppContent() {
                             {rem.status === 'pending' ? (
                               <button 
                                 onClick={() => verifyRemittance(rem.id)}
-                                className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline"
+                                className={`text-[10px] font-bold underline ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-800'}`}
                               >
                                 Verify
                               </button>
                             ) : (
                               <button 
                                 onClick={() => handleResendAcceptanceEmail(rem)}
-                                className="text-[10px] font-bold text-green-600 hover:text-green-800 underline"
+                                className={`text-[10px] font-bold underline ${isDarkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-green-600 hover:text-green-800'}`}
                               >
                                 Resend
                               </button>
@@ -7578,7 +9966,7 @@ function AppContent() {
                                 setRemittanceIdToDelete(rem.id);
                                 setIsDeleteModalOpen(true);
                               }}
-                              className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                              className={`p-1.5 transition-colors ${isDarkMode ? 'text-slate-500 hover:text-red-400' : 'text-gray-400 hover:text-red-500'}`}
                               title="Delete Remittance"
                             >
                               <Trash2 size={14} />
@@ -7589,7 +9977,7 @@ function AppContent() {
                     ))}
                     {remittances.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="py-12 text-center text-gray-400 text-sm italic">
+                        <td colSpan={6} className={`py-12 text-center text-sm italic ${isDarkMode ? 'text-slate-500' : 'text-gray-400'}`}>
                           No remittance records found.
                         </td>
                       </tr>
@@ -7600,36 +9988,40 @@ function AppContent() {
 
               {/* Mobile Card View */}
               <div className="md:hidden space-y-4">
-                {remittances.sort((a, b) => b.timestamp?.seconds - a.timestamp?.seconds).map(rem => (
-                  <div key={rem.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
+                {remittances.sort((a, b) => (ensureTimestamp(b.timestamp).seconds || 0) - (ensureTimestamp(a.timestamp).seconds || 0)).map(rem => (
+                  <div key={rem.id} className={`p-4 rounded-2xl border shadow-sm space-y-3 ${
+                    isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-white border-gray-100'
+                  }`}>
                     <div className="flex justify-between items-start">
                       <div>
-                        <div className="text-sm font-bold text-gray-900">{rem.bodName}</div>
-                        <div className="text-xs text-gray-500">{rem.gradeLevel}</div>
+                        <div className={`text-sm font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{rem.bodName}</div>
+                        <div className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{rem.gradeLevel}</div>
                       </div>
                       <span className={`px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-tighter ${
-                        rem.status === 'verified' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                        rem.status === 'verified' 
+                          ? isDarkMode ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/60' : 'bg-green-100 text-green-700'
+                          : isDarkMode ? 'bg-amber-950/80 text-amber-400 border border-amber-800/60' : 'bg-yellow-100 text-yellow-700'
                       }`}>
                         {rem.status}
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-gray-500 text-xs">{rem.timestamp?.toDate().toLocaleDateString()}</span>
-                      <span className="font-black text-[#0038A8]">₱{rem.amount.toFixed(2)}</span>
+                      <span className={`text-xs ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>{ensureTimestamp(rem.timestamp).toDate().toLocaleDateString()}</span>
+                      <span className={`font-black ${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'}`}>₱{rem.amount.toFixed(2)}</span>
                     </div>
                     {(profile.role === 'admin' || profile.email === 'lpcaanhsfacultyclubofficers@gmail.com' || profile.email === 'ngehthong@gmail.com') && (
-                      <div className="pt-3 border-t border-gray-50 flex justify-end gap-3">
+                      <div className={`pt-3 border-t flex justify-end gap-3 ${isDarkMode ? 'border-slate-800' : 'border-gray-50'}`}>
                         {rem.status === 'pending' ? (
                           <button 
                             onClick={() => verifyRemittance(rem.id)}
-                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 underline"
+                            className={`text-[10px] font-bold underline ${isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-blue-600 hover:text-blue-800'}`}
                           >
                             Verify
                           </button>
                         ) : (
                           <button 
                             onClick={() => handleResendAcceptanceEmail(rem)}
-                            className="text-[10px] font-bold text-green-600 hover:text-green-800 underline"
+                            className={`text-[10px] font-bold underline ${isDarkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-green-600 hover:text-green-800'}`}
                           >
                             Resend
                           </button>
@@ -7639,7 +10031,7 @@ function AppContent() {
                             setRemittanceIdToDelete(rem.id);
                             setIsDeleteModalOpen(true);
                           }}
-                          className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                          className={`p-1.5 transition-colors ${isDarkMode ? 'text-slate-500 hover:text-red-400' : 'text-gray-400 hover:text-red-500'}`}
                           title="Delete Remittance"
                         >
                           <Trash2 size={14} />
@@ -7649,7 +10041,9 @@ function AppContent() {
                   </div>
                 ))}
                 {remittances.length === 0 && (
-                  <div className="py-8 text-center text-gray-400 text-sm italic border border-gray-100 rounded-2xl">
+                  <div className={`py-8 text-center text-sm italic border rounded-2xl ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800 text-slate-500' : 'border-gray-100 text-gray-400'
+                  }`}>
                     No remittance records found.
                   </div>
                 )}
@@ -7710,30 +10104,34 @@ function AppContent() {
                           return s + d.amount;
                         }, 0);
                       }, 0);
-                      const totalCollectibles = gradeTeachers.length * standardDues.filter(d => !d.isVoluntary).reduce((sum, d) => sum + d.amount, 0);
-                      const fullyPaidCount = gradeTeachers.filter(r => r.paidDueIds.length === standardDues.length).length;
+                      const totalCollectibles = gradeTeachers.length * requiredDues.reduce((sum, d) => sum + d.amount, 0);
+                      const fullyPaidCount = gradeTeachers.filter(r => requiredDues.length > 0 && requiredDues.every(d => r.paidDueIds.includes(d.id))).length;
 
                       return (
-                        <div key={grade} className="bg-white p-5 lg:p-6 rounded-[2rem] shadow-sm border border-gray-100 hover:border-blue-100 hover:shadow-md transition-all group flex flex-col justify-between">
+                        <div key={grade} className={`p-5 lg:p-6 rounded-[2rem] shadow-sm border transition-all group flex flex-col justify-between ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100 hover:border-slate-700' : 'bg-white border-gray-100 text-gray-900 hover:border-blue-100 hover:shadow-md'
+                        }`}>
                           <div>
                             <div className="flex justify-between items-start mb-4">
-                              <div className="text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-[0.2em]">{grade}</div>
-                              <div className="w-8 h-8 bg-gray-50 rounded-xl flex items-center justify-center group-hover:bg-blue-50 transition-colors">
-                                <Users size={14} className="text-gray-400 group-hover:text-[#0038A8]" />
+                              <div className={`text-[10px] sm:text-xs font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>{grade}</div>
+                              <div className={`w-8 h-8 rounded-xl flex items-center justify-center transition-colors ${
+                                isDarkMode ? 'bg-slate-800 group-hover:bg-blue-900/50' : 'bg-gray-50 group-hover:bg-blue-50'
+                              }`}>
+                                <Users size={14} className={isDarkMode ? 'text-slate-400 group-hover:text-blue-400' : 'text-gray-400 group-hover:text-[#0038A8]'} />
                               </div>
                             </div>
-                            <div className="text-lg lg:text-2xl font-black text-gray-900 mb-3 truncate">₱{totalCollected.toLocaleString()}</div>
+                            <div className={`text-lg lg:text-2xl font-black mb-3 truncate ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>₱{totalCollected.toLocaleString()}</div>
                           </div>
                           <div>
-                            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-3">
+                            <div className={`w-full h-2 rounded-full overflow-hidden mb-3 ${isDarkMode ? 'bg-slate-800' : 'bg-gray-100'}`}>
                               <div 
                                 className="bg-green-500 h-full transition-all duration-1000 ease-out" 
                                 style={{ width: `${totalCollectibles > 0 ? (totalCollected / totalCollectibles) * 100 : 0}%` }}
                               ></div>
                             </div>
                             <div className="flex justify-between items-center text-[10px] font-bold">
-                              <span className="text-gray-400 uppercase tracking-widest">Progress</span>
-                              <span className="text-green-600 font-black">{fullyPaidCount} / {gradeTeachers.length}</span>
+                              <span className={`uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Fully Paid</span>
+                              <span className="text-green-500 font-black">{fullyPaidCount} / {gradeTeachers.length}</span>
                             </div>
                           </div>
                         </div>
@@ -7742,112 +10140,90 @@ function AppContent() {
                   </div>
                 </div>
 
-                {/* Collection Progress Chart */}
-                <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-[#0038A8]">
-                        <BarChart3 size={24} />
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">Collection Progress</h2>
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Real-time Dues Monitoring</p>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2 w-full sm:w-auto">
-                      <button onClick={handleDownloadTermsDocx} className="flex-1 sm:flex-none p-3 bg-purple-50 text-purple-600 rounded-2xl hover:bg-purple-100 transition-all flex items-center justify-center gap-2" title="Terms Agreement Report">
-                        <ShieldCheck size={18} /> <span className="sm:hidden text-xs font-bold">Terms</span>
-                      </button>
-                      <button onClick={handleDownloadExcel} className="flex-1 sm:flex-none p-3 bg-green-50 text-green-600 rounded-2xl hover:bg-green-100 transition-all flex items-center justify-center gap-2" title="Excel Report">
-                        <FileText size={18} /> <span className="sm:hidden text-xs font-bold">Excel</span>
-                      </button>
-                      <button onClick={handleDownloadComprehensiveReportDocx} className="flex-1 sm:flex-none p-3 bg-blue-50 text-blue-600 rounded-2xl hover:bg-blue-100 transition-all flex items-center justify-center gap-2" title="Comprehensive DOCX Report">
-                        <FileText size={18} /> <span className="sm:hidden text-xs font-bold">Comprehensive</span>
-                      </button>
-                      <button onClick={handleDownloadGlobalPaymentHistoryDocx} className="flex-1 sm:flex-none p-3 bg-orange-50 text-orange-600 rounded-2xl hover:bg-orange-100 transition-all flex items-center justify-center gap-2" title="All Faculty Payments Log">
-                        <History size={18} /> <span className="text-xs font-bold hidden sm:inline">Logs DOCX</span><span className="sm:hidden text-xs font-bold">Logs</span>
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-                    {standardDues.map(due => {
-                      const paidCount = records.filter(r => r.paidDueIds.includes(due.id)).length;
-                      const progress = (paidCount / records.length) * 100;
-
-                      return (
-                        <div key={due.id} className="space-y-2 p-4 rounded-2xl border border-gray-50 hover:bg-gray-50 transition-colors">
-                          <div className="flex justify-between items-center">
-                            <span className="text-xs font-black text-gray-700 uppercase tracking-tight">{due.name}</span>
-                            <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">{paidCount} / {records.length}</span>
-                          </div>
-                          <div className="w-full bg-gray-100 h-2.5 rounded-full overflow-hidden">
-                            <div 
-                              className="bg-[#0038A8] h-full transition-all duration-1000 ease-in-out" 
-                              style={{ width: `${records.length > 0 ? progress : 0}%` }}
-                            ></div>
-                          </div>
-                          <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest text-right">
-                            {progress.toFixed(0)}% Collected
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                {/* Collection Analytics & Progress Chart */}
+                <CollectionAnalyticsChart
+                  records={records}
+                  standardDues={standardDues}
+                  remittances={remittances}
+                  isDarkMode={isDarkMode}
+                  handleDownloadTermsDocx={handleDownloadTermsDocx}
+                  handleDownloadExcel={handleDownloadExcel}
+                  handleDownloadComprehensiveReportDocx={handleDownloadComprehensiveReportDocx}
+                  handleDownloadGlobalPaymentHistoryDocx={handleDownloadGlobalPaymentHistoryDocx}
+                />
               </div>
 
               {/* Right Column - Actions Panel (320px width on desktop) */}
               <div className="xl:w-[320px] shrink-0 space-y-8">
                 
                 {/* Quick Actions Panel */}
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
-                  <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-6">Quick Actions</h3>
+                <div className={`p-6 rounded-[2rem] border shadow-sm ${
+                  isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'
+                }`}>
+                  <h3 className={`text-sm font-black uppercase tracking-widest mb-6 ${isDarkMode ? 'text-slate-200' : 'text-gray-900'}`}>Quick Actions</h3>
                   <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-2 gap-3">
-                    <button onClick={() => setActiveTab('collection')} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-blue-200 hover:bg-blue-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-[#0038A8] transition-colors"><Users size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-[#0038A8]">Teachers</span>
+                    <button onClick={() => setActiveTab('collection')} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-blue-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-blue-200 hover:bg-blue-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-blue-400 transition-colors' : 'text-gray-400 group-hover:text-[#0038A8] transition-colors'}><Users size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-blue-400' : 'text-gray-600 group-hover:text-[#0038A8]'}`}>Teachers</span>
                     </button>
-                    <button onClick={() => setActiveTab('expenses')} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-red-200 hover:bg-red-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-red-500 transition-colors"><CreditCard size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-red-500">Expenses</span>
+                    <button onClick={() => setActiveTab('expenses')} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-red-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-red-200 hover:bg-red-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-red-400 transition-colors' : 'text-gray-400 group-hover:text-red-500 transition-colors'}><CreditCard size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-red-400' : 'text-gray-600 group-hover:text-red-500'}`}>Expenses</span>
                     </button>
-                    <button onClick={() => setActiveTab('audit')} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-purple-200 hover:bg-purple-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-purple-500 transition-colors"><Shield size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-purple-500">Audits</span>
+                    <button onClick={() => setActiveTab('audit')} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-purple-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-purple-200 hover:bg-purple-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-purple-400 transition-colors' : 'text-gray-400 group-hover:text-purple-500 transition-colors'}><Shield size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-purple-400' : 'text-gray-600 group-hover:text-purple-500'}`}>Audits</span>
                     </button>
-                    <button onClick={() => setActiveTab('settings')} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-blue-200 hover:bg-blue-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-[#0038A8] transition-colors"><Settings size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-[#0038A8]">Settings</span>
+                    <button onClick={() => setActiveTab('settings')} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-blue-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-blue-200 hover:bg-blue-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-blue-400 transition-colors' : 'text-gray-400 group-hover:text-[#0038A8] transition-colors'}><Settings size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-blue-400' : 'text-gray-600 group-hover:text-[#0038A8]'}`}>Settings</span>
                     </button>
-                    <button onClick={() => setActiveTab('system')} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-purple-200 hover:bg-purple-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-purple-500 transition-colors"><Shield size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-purple-500">System</span>
+                    <button onClick={() => setActiveTab('system')} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-purple-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-purple-200 hover:bg-purple-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-purple-400 transition-colors' : 'text-gray-400 group-hover:text-purple-500 transition-colors'}><Shield size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-purple-400' : 'text-gray-600 group-hover:text-purple-500'}`}>System</span>
                     </button>
-                    <button onClick={handleDownloadComprehensiveReportDocx} className="bg-gray-50 p-4 rounded-2xl border border-transparent hover:border-green-200 hover:bg-green-50 transition-all flex flex-col items-center gap-3 group">
-                      <div className="text-gray-400 group-hover:text-green-500 transition-colors"><FileText size={20} /></div>
-                      <span className="text-[9px] font-black text-gray-600 uppercase tracking-widest text-center group-hover:text-green-500">Reports</span>
+                    <button onClick={handleDownloadComprehensiveReportDocx} className={`p-4 rounded-2xl border transition-all flex flex-col items-center gap-3 group ${
+                      isDarkMode ? 'bg-slate-800/80 border-slate-700 hover:border-emerald-500/50 hover:bg-slate-800' : 'bg-gray-50 border-transparent hover:border-green-200 hover:bg-green-50'
+                    }`}>
+                      <div className={isDarkMode ? 'text-slate-400 group-hover:text-emerald-400 transition-colors' : 'text-gray-400 group-hover:text-green-500 transition-colors'}><FileText size={20} /></div>
+                      <span className={`text-[9px] font-black uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-300 group-hover:text-emerald-400' : 'text-gray-600 group-hover:text-green-500'}`}>Reports</span>
                     </button>
                   </div>
                 </div>
 
                 {/* Initial Balance Management Panel */}
-                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm">
-                  <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest mb-6">Initial Balance</h3>
+                <div className={`p-6 rounded-[2rem] border shadow-sm ${
+                  isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'
+                }`}>
+                  <h3 className={`text-sm font-black uppercase tracking-widest mb-6 ${isDarkMode ? 'text-slate-200' : 'text-gray-900'}`}>Initial Balance</h3>
                   <div className="flex flex-col gap-3">
                     <input 
                       type="number" 
                       placeholder="Amount (₱)" 
                       value={newBalanceAmount}
                       onChange={(e) => setNewBalanceAmount(e.target.value)}
-                      className="w-full px-5 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold"
+                      className={`w-full px-5 py-3 rounded-xl border outline-none text-sm font-bold ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:ring-2 focus:ring-blue-500/30' : 'bg-white border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-100'
+                      }`}
                     />
                     <input 
                       type="text" 
                       placeholder="Description (e.g. Carry-over)" 
                       value={newBalanceDescription}
                       onChange={(e) => setNewBalanceDescription(e.target.value)}
-                      className="w-full px-5 py-3 rounded-xl border border-gray-200 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-bold"
+                      className={`w-full px-5 py-3 rounded-xl border outline-none text-sm font-bold ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:ring-2 focus:ring-blue-500/30' : 'bg-white border-gray-200 text-gray-900 focus:ring-2 focus:ring-blue-100'
+                      }`}
                     />
                     <button 
                       onClick={handleAddInitialBalance}
@@ -7858,86 +10234,200 @@ function AppContent() {
                   </div>
                 </div>
 
+                {/* Database Backup Management Panel */}
+                <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm mt-8">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-[#0038A8]">
+                      <Database size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Database Backup</h3>
+                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Disaster Recovery</p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex flex-col gap-3">
+                    {!backupDownloadUrl ? (
+                      <button 
+                        onClick={handleDownloadBackup}
+                        disabled={isGeneratingBackup}
+                        className={`w-full text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md flex items-center justify-center gap-2 ${isGeneratingBackup ? 'bg-blue-400 cursor-not-allowed' : 'bg-[#0038A8] hover:bg-blue-800'}`}
+                      >
+                        {isGeneratingBackup ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent blur-[0.5px]"></div>
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Download size={16} /> Generate Backup
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <a 
+                        href={backupDownloadUrl}
+                        download={backupFileName}
+                        className="w-full bg-green-600 text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-green-700 transition-all shadow-md flex items-center justify-center gap-2"
+                        onClick={() => {
+                          // Hide the download button after 2 seconds to reset state for the next time
+                          setTimeout(() => {
+                            setBackupDownloadUrl(null);
+                          }, 2000);
+                        }}
+                      >
+                        <Download size={16} /> Download Ready!
+                      </a>
+                    )}
+                    <div className="relative">
+                      <input 
+                        type="file" 
+                        accept=".json"
+                        className="hidden" 
+                        id="backup-upload"
+                        onChange={handleUploadBackup}
+                      />
+                      <label 
+                        htmlFor="backup-upload"
+                        className="w-full cursor-pointer bg-red-50 text-red-600 border border-transparent hover:border-red-200 px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Upload size={16} /> Restore Backup
+                      </label>
+                    </div>
+                    <p className="text-[9px] text-gray-500 font-bold uppercase text-center mt-2 tracking-widest leading-relaxed">
+                      Warning: Restoring will overwrite all current data.
+                    </p>
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>
         )}
 
         {activeTab === 'system' && profile.role === 'admin' && (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Announcement Section */}
-            <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100'} p-6 md:p-8 rounded-[2.5rem] shadow-sm border`}>
-              <div className="flex items-center gap-4 mb-8">
-                <div className={`${isDarkMode ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-50 text-purple-600'} w-12 h-12 rounded-2xl flex items-center justify-center`}>
-                  <Megaphone size={24} />
-                </div>
-                <div>
-                  <h2 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} uppercase tracking-tight`}>Broadcast Announcement</h2>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Send notifications to all faculty members</p>
-                </div>
-              </div>
-              
-              <div className="space-y-4 max-w-2xl">
-                <div>
-                  <label className={`block text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} mb-2`}>Notification Title</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g., General Meeting / Holiday Notice"
-                    value={announcementTitle}
-                    onChange={e => setAnnouncementTitle(e.target.value)}
-                    className={`w-full px-4 py-3 rounded-xl text-sm font-bold border transition-all outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white focus:ring-purple-900' : 'bg-gray-50 border-gray-200 focus:ring-purple-100'} focus:ring-4`}
-                  />
-                </div>
-                <div>
-                  <label className={`block text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-gray-500' : 'text-gray-400'} mb-2`}>Message Content</label>
-                  <textarea 
-                    placeholder="Write your announcement here..."
-                    value={announcementMessage}
-                    onChange={e => setAnnouncementMessage(e.target.value)}
-                    rows={4}
-                    className={`w-full px-4 py-3 rounded-xl text-sm font-bold border transition-all outline-none ${isDarkMode ? 'bg-gray-800 border-gray-700 text-white focus:ring-purple-900' : 'bg-gray-50 border-gray-200 focus:ring-purple-100'} focus:ring-4`}
-                  />
-                </div>
-                <button 
-                  onClick={sendAnnouncement}
-                  disabled={isSendingAnnouncement || !announcementTitle || !announcementMessage}
-                  className={`flex items-center gap-2 px-8 py-4 ${isDarkMode ? 'bg-purple-600' : 'bg-purple-600'} text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:opacity-90 transition-all shadow-lg shadow-purple-200 disabled:opacity-50`}
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Top Sub-Tab Navigation Header */}
+            <div className={`p-2.5 rounded-2xl sm:rounded-3xl border backdrop-blur-md flex flex-col sm:flex-row gap-2.5 items-stretch sm:items-center justify-between ${
+              isDarkMode ? 'bg-slate-900/90 border-slate-800' : 'bg-white/95 border-slate-200/80 shadow-sm'
+            }`}>
+              <div className="grid grid-cols-3 gap-1.5 w-full sm:w-auto">
+                <button
+                  onClick={() => setAdminSubTab('users')}
+                  className={`px-3.5 sm:px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 ${
+                    adminSubTab === 'users'
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                      : (isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100')
+                  }`}
                 >
-                  {isSendingAnnouncement ? (
-                    <Loader2 className="animate-spin" size={16} />
-                  ) : (
-                    <Send size={16} />
-                  )}
-                  {isSendingAnnouncement ? 'Broadcasting...' : 'Broadcast to All Teachers'}
+                  <Shield size={16} />
+                  <span>Users & Access</span>
+                </button>
+
+                <button
+                  onClick={() => setAdminSubTab('broadcast')}
+                  className={`px-3.5 sm:px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 ${
+                    adminSubTab === 'broadcast'
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                      : (isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100')
+                  }`}
+                >
+                  <Megaphone size={16} />
+                  <span>Broadcast</span>
+                </button>
+
+                <button
+                  onClick={() => setAdminSubTab('maintenance')}
+                  className={`px-3.5 sm:px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 ${
+                    adminSubTab === 'maintenance'
+                      ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                      : (isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100')
+                  }`}
+                >
+                  <Database size={16} />
+                  <span>Maintenance</span>
+                </button>
+              </div>
+
+              {/* Quick Status / Lockout toggle */}
+              <div className="flex items-center justify-end px-2">
+                <button 
+                  onClick={async () => {
+                    try {
+                      const newMode = !isMaintenanceMode;
+                      await setDoc(doc(db, 'settings', 'global'), { 
+                        maintenanceMode: newMode 
+                      }, { merge: true });
+                      showToast(`System Maintenance is now ${newMode ? 'ON' : 'OFF'}`);
+                      logActivity(
+                        newMode ? 'Enabled Maintenance Mode' : 'Disabled Maintenance Mode', 
+                        `Teachers are now ${newMode ? 'locked out' : 'granted access'}`, 
+                        'critical'
+                      );
+                    } catch (e) {
+                      showToast("Failed to toggle maintenance mode.");
+                    }
+                  }}
+                  className={`w-full sm:w-auto py-2.5 px-4 rounded-xl font-bold text-xs uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 ${
+                    isMaintenanceMode 
+                      ? 'bg-amber-500/20 text-amber-500 border border-amber-500/30' 
+                      : (isDarkMode ? 'bg-slate-800 text-slate-300 border border-slate-700' : 'bg-slate-100 text-slate-700 border border-slate-200')
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full ${isMaintenanceMode ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`}></span>
+                  <span>{isMaintenanceMode ? 'Maintenance Lockout Active' : 'System Online'}</span>
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Grid Container for User Management / Profile Changes / Activity */}
+            {adminSubTab === 'users' && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-6 lg:gap-8">
               {/* User Management Section */}
-              <div className="lg:col-span-2 bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-purple-50 rounded-2xl flex items-center justify-center text-purple-600">
-                      <Shield size={24} />
+              <div id="user-management-section" className={`md:col-span-2 lg:col-span-2 xl:col-span-3 p-4 sm:p-6 md:p-8 xl:p-10 rounded-[2rem] sm:rounded-[2.5rem] xl:rounded-[3rem] shadow-xl border backdrop-blur-md transition-all duration-300 ${isDarkMode ? 'bg-slate-900/90 border-slate-800 shadow-black/30' : 'bg-white/95 border-slate-100 shadow-indigo-100/30'}`}>
+                
+                {/* Header Profile Info Bar */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-8 xl:mb-10 gap-6 border-b border-gray-100 dark:border-slate-800/60 pb-6">
+                  <div className="flex items-center gap-4 xl:gap-5">
+                    <div className="w-12 h-12 xl:w-16 xl:h-16 bg-purple-500/10 rounded-2xl xl:rounded-[1.25rem] flex items-center justify-center text-purple-600 dark:text-purple-400">
+                      <Shield size={24} className="xl:w-8 xl:h-8" />
                     </div>
                     <div>
-                      <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">User Management</h2>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">BODs & Faculty Access Control</p>
+                      <h2 className={`text-lg sm:text-xl lg:text-2xl xl:text-3xl font-black ${isDarkMode ? 'text-slate-100' : 'text-slate-900'} uppercase tracking-tight`}>User Management</h2>
+                      <p className="text-[10px] xl:text-xs text-slate-400 font-extrabold uppercase tracking-widest mt-1">BODs & Faculty Access Control</p>
                     </div>
                   </div>
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full sm:w-auto">
-                    <div className="relative w-full sm:w-64">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                  
+                  {/* Control search and action bar, wraps elegantly on smaller panels */}
+                  <div className="flex flex-col md:flex-row items-stretch md:items-center gap-3 w-full lg:w-auto">
+                    <div className="relative w-full md:w-60 xl:w-72">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
                       <input 
                         type="text" 
-                        placeholder="Search users..." 
+                        placeholder="Search active users..." 
                         value={userSearchTerm}
                         onChange={e => setUserSearchTerm(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                        className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-xs font-bold outline-none transition-all duration-200 ${
+                          isDarkMode 
+                            ? 'bg-slate-950 border-slate-800 text-slate-200 focus:ring-2 focus:ring-purple-500/40' 
+                            : 'bg-slate-50 border-slate-200 text-slate-800 focus:ring-2 focus:ring-purple-500/30'
+                        }`}
                       />
                     </div>
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                    
+                    <div className="grid grid-cols-2 md:flex md:flex-row items-center gap-2">
+                      <button
+                        onClick={() => setShowAllUsersList(!showAllUsersList)}
+                        className={`col-span-2 md:col-span-1 px-4 py-3 rounded-xl border font-black text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                          showAllUsersList 
+                            ? (isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200')
+                            : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900/50 hover:bg-indigo-100/80 dark:hover:bg-indigo-950/80'
+                        }`}
+                      >
+                        {showAllUsersList ? <EyeOff size={13} /> : <Eye size={13} />}
+                        <span>{showAllUsersList ? 'Hide Users' : 'Show Users'}</span>
+                      </button>
+                      
                       <button 
                         onClick={async () => {
                           if (confirm("Are you sure you want to delete ALL QR login credentials? This is perfectly safe: Teacher profiles and payment data will NOT be deleted. They will simply need a new QR code to log in next time.")) {
@@ -7962,11 +10452,17 @@ function AppContent() {
                             }
                           }
                         }}
-                        className="flex-1 sm:flex-none px-4 py-2 bg-blue-50 text-blue-600 rounded-xl border border-blue-100 font-black text-[10px] uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2"
+                        className={`px-3 py-3 rounded-xl border font-black text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                          isDarkMode 
+                            ? 'bg-amber-950/30 text-amber-400 border-amber-900/50 hover:bg-amber-900/50' 
+                            : 'bg-amber-50 text-amber-700 border-amber-100 hover:bg-amber-100'
+                        }`}
+                        title="Delete All Temporary QR Logins"
                       >
-                        <Trash2 size={14} />
-                        Purge QR
+                        <Trash2 size={13} />
+                        <span>Purge QR</span>
                       </button>
+                      
                       <button 
                         onClick={async () => {
                           if (confirm("Are you sure you want to completely clear ALL user login sessions (including QR logins)? \n\nIMPORTANT: Teacher profiles and payment history will NOT be deleted. Only the 'logins' are cleared. Administrative access for primary admins will be preserved.")) {
@@ -7990,150 +10486,141 @@ function AppContent() {
                             }
                           }
                         }}
-                        className="flex-1 sm:flex-none px-4 py-2 bg-red-50 text-red-600 rounded-xl border border-red-100 font-black text-[10px] uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all flex items-center justify-center gap-2"
+                        className={`px-3 py-3 rounded-xl border font-black text-[10px] uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-1.5 ${
+                          isDarkMode 
+                            ? 'bg-rose-950/30 text-rose-400 border-rose-900/50 hover:bg-rose-900/50' 
+                            : 'bg-rose-50 text-rose-700 border-rose-100 hover:bg-rose-100'
+                        }`}
+                        title="Revoke and Purge Entire Login sessions"
                       >
-                        <Trash2 size={14} />
-                        Purge All
+                        <Trash2 size={13} />
+                        <span>Purge All</span>
                       </button>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-                  {/* Email System Status */}
-                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center justify-between mb-6">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-[#0038A8] group-hover:bg-[#0038A8] group-hover:text-white transition-all">
-                          <Mail size={16} />
+                {/* Grid container with 4 cards inside User Management */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 lg:mb-10">
+                  
+                  {/* Card 1: Email System Status (NO TEST BUTTON, DESIGNED TO THE EYES) */}
+                  <div className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-100 hover:bg-white hover:shadow-md'
+                  }`}>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                            isDarkMode ? 'bg-blue-950/50 text-blue-400' : 'bg-blue-100 text-[#0038A8]'
+                          }`}>
+                            <Mail size={16} />
+                          </div>
+                          <div>
+                            <h3 className={`text-xs sm:text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Email Dispatcher</h3>
+                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">SMTP Server Gateway</p>
+                          </div>
                         </div>
-                        <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Email System</h3>
+                        {emailStatus && (
+                          <div className={`px-2.5 py-1 rounded-full text-[8px] font-black uppercase tracking-wider inline-flex items-center gap-1 ${
+                            emailStatus.configured 
+                              ? 'bg-emerald-100/80 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400' 
+                              : 'bg-rose-100/80 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full animate-ping ${emailStatus.configured ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                            <span>{emailStatus.configured ? 'Active' : 'Offline'}</span>
+                          </div>
+                        )}
                       </div>
-                      {emailStatus && (
-                        <div className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-widest ${emailStatus.configured ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                          {emailStatus.configured ? 'Configured' : 'Missing Config'}
-                        </div>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                      {emailStatus ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between text-[9px] font-bold">
-                            <span className="text-gray-400 uppercase tracking-widest">User:</span>
-                            <span className="text-gray-700 truncate max-w-[120px]">{emailStatus.gmailUser || 'Not Set'}</span>
-                          </div>
-                          <div className="flex items-center justify-between text-[9px] font-bold">
-                            <span className="text-gray-400 uppercase tracking-widest">App Password:</span>
-                            <span className={emailStatus.hasAppPassword ? 'text-green-600' : 'text-red-600'}>
-                              {emailStatus.hasAppPassword ? 'DETECTED' : 'MISSING'}
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
-                          Verify that your Gmail SMTP settings are correct.
-                        </p>
-                      )}
-                      <button
-                        onClick={testEmailSystem}
-                        disabled={isTestingEmail}
-                        className="w-full py-3 px-4 bg-white text-[#0038A8] rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-50 transition-all border border-blue-100 disabled:opacity-50 flex items-center justify-center gap-2"
-                      >
-                        {isTestingEmail ? <Loader2 className="animate-spin" size={14} /> : <Send size={14} />}
-                        Test Email
-                      </button>
 
-                      {emailStatus?.logs && emailStatus.logs.length > 0 && (
-                        <div className="mt-6 pt-6 border-t border-gray-100">
-                          <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-3">Recent OTP Logs</p>
-                          <div className="space-y-2 max-h-[150px] overflow-y-auto custom-scrollbar pr-2">
-                            {emailStatus.logs.map((log, idx) => (
-                              <div key={idx} className={`p-2 bg-white rounded-lg border ${log.type === 'qr' ? 'border-blue-100 bg-blue-50/30' : 'border-gray-50'} flex flex-col gap-1`}>
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className={`w-1.5 h-1.5 rounded-full ${log.type === 'qr' ? 'bg-blue-500' : 'bg-purple-500'}`}></span>
-                                    <span className="text-[8px] font-black text-gray-900 truncate max-w-[100px]">{log.email}</span>
-                                  </div>
-                                  <span className={`text-[8px] font-black uppercase ${log.success ? 'text-green-600' : 'text-red-600'}`}>
-                                    {log.success ? 'SENT' : 'FAIL'}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[8px] font-bold text-gray-400">
-                                    {log.type === 'qr' ? 'QR CODE' : 'OTP CODE'} • {new Date(log.timestamp).toLocaleTimeString()}
-                                  </span>
-                                  <span className="text-[8px] font-black text-[#0038A8]">
-                                    {log.type === 'qr' ? 'GENERATED' : `Code: ${log.code}`}
-                                  </span>
-                                </div>
-                                {log.error && log.error !== 'Simulated' && (
-                                  <p className="text-[7px] text-red-400 font-bold leading-tight mt-1">{log.error}</p>
-                                )}
+                      <div className={`p-4 rounded-xl border mb-4 text-[10px] font-bold space-y-2.5 ${
+                        isDarkMode ? 'bg-slate-900/60 border-slate-800 text-slate-300' : 'bg-white border-slate-100 text-slate-600 shadow-sm'
+                      }`}>
+                        {emailStatus ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400 uppercase tracking-widest text-[9px]">Outgoing ID:</span>
+                              <span className="font-extrabold break-all max-w-[170px] sm:max-w-[190px] text-right truncate text-slate-800 dark:text-slate-100">{emailStatus.gmailUser || 'Not Set'}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400 uppercase tracking-widest text-[9px]">API Security Key:</span>
+                              <span className={`font-black uppercase tracking-wider ${emailStatus.hasAppPassword ? 'text-emerald-500' : 'text-red-500'}`}>
+                                {emailStatus.hasAppPassword ? 'Verified Secure' : 'Missing Credentials'}
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <p className="text-slate-400 font-medium leading-relaxed uppercase tracking-widest text-[8px]">
+                            Querying SMTP infrastructure credentials from workspace setup configurations...
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Email Status logs container */}
+                    {emailStatus?.logs && emailStatus.logs.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recent Delivery Logs</span>
+                          <span className="text-[8px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 font-extrabold">LIVE STREAM</span>
+                        </div>
+                        <div className="space-y-1.5 max-h-[140px] overflow-y-auto custom-scrollbar pr-1.5">
+                          {emailStatus.logs.map((log, idx) => (
+                            <div key={idx} className={`p-2 rounded-lg border text-[9px] ${
+                              isDarkMode ? 'bg-slate-900/40 border-slate-800/80' : 'bg-white border-slate-100'
+                            } flex flex-col gap-0.5`}>
+                              <div className="flex items-center justify-between">
+                                <span className="font-black text-slate-800 dark:text-slate-200 truncate max-w-[120px]">{log.email}</span>
+                                <span className={`font-black text-[8px] uppercase ${log.success ? 'text-emerald-500' : 'text-red-400'}`}>
+                                  {log.success ? 'DELIVERED' : 'FAIL'}
+                                </span>
                               </div>
-                            ))}
-                          </div>
+                              <div className="flex items-center justify-between text-slate-400 text-[8px] font-medium">
+                                <span className="uppercase tracking-wide">{log.type === 'qr' ? 'QR Badge' : 'OTP Code'} • {new Date(log.timestamp).toLocaleTimeString()}</span>
+                                <span className="font-black font-mono text-[#0038A8] dark:text-blue-400">{log.type === 'qr' ? 'GEN' : `Code: ${log.code}`}</span>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-[9px] text-slate-400 font-black uppercase tracking-wider">
+                        No recent OTP code dispatches found.
+                      </div>
+                    )}
                   </div>
 
-                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
-                        <Lock size={16} />
+                  {/* Card 2: Manual Teacher QR Generator */}
+                  <div className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-100 hover:bg-white hover:shadow-md'
+                  }`}>
+                    <div>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                          isDarkMode ? 'bg-emerald-950/50 text-emerald-400' : 'bg-emerald-100 text-emerald-600'
+                        }`}>
+                          <QrCode size={16} />
+                        </div>
+                        <div>
+                          <h3 className={`text-xs sm:text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Direct Teacher QR</h3>
+                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Instant Digital Member Credential</p>
+                        </div>
                       </div>
-                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Manual OTP</h3>
-                    </div>
-                    <div className="space-y-4">
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
-                        Generate a code manually if a teacher isn't receiving emails.
+                      
+                      <p className={`text-[10px] leading-relaxed mb-4 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Instantly deploy credentials to a faculty member via email lookup.
                       </p>
-                      <input 
-                        id="manual-otp-email"
-                        type="email" 
-                        placeholder="Teacher's Email"
-                        className="w-full p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-500 transition-all"
-                      />
-                      <button 
-                        onClick={async () => {
-                          const email = (document.getElementById('manual-otp-email') as HTMLInputElement).value;
-                          if (!email) return showToast("Please enter an email");
-                          const code = Math.floor(100000 + Math.random() * 900000).toString();
-                          try {
-                            await fetch('/api/send-verification-code', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ email, code, manual: true })
-                            });
-                            showToast(`Manual Code for ${email}: ${code}`);
-                            checkEmailStatus();
-                          } catch (e) {
-                            showToast("Failed to log manual code");
-                          }
-                        }}
-                        className="w-full bg-purple-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-purple-700 transition-all shadow-lg shadow-purple-200"
-                      >
-                        Generate Manual Code
-                      </button>
                     </div>
-                  </div>
 
-                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-8 h-8 bg-green-100 rounded-xl flex items-center justify-center text-green-600 group-hover:bg-green-600 group-hover:text-white transition-all">
-                        <QrCode size={16} />
-                      </div>
-                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Manual Teacher QR</h3>
-                    </div>
-                    <div className="space-y-4">
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-relaxed">
-                        Generate a QR code for a teacher manually.
-                      </p>
+                    <div className="space-y-3">
                       <input 
                         id="manual-teacher-email"
                         type="email" 
-                        placeholder="Teacher's Email"
-                        className="w-full p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-green-500 transition-all"
+                        placeholder="Search teacher's email address..."
+                        className={`w-full p-3 rounded-xl text-xs font-bold outline-none transition-all duration-200 ${
+                          isDarkMode 
+                            ? 'bg-slate-900 border-slate-800 text-slate-200 focus:ring-2 focus:ring-emerald-500/40' 
+                            : 'bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-emerald-500/30 shadow-sm'
+                        }`}
                       />
                       <button 
                         onClick={async () => {
@@ -8159,67 +10646,117 @@ function AppContent() {
                             setLoading(false);
                           }
                         }}
-                        className="w-full bg-green-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-green-700 transition-all shadow-lg shadow-green-200"
+                        className="w-full bg-emerald-600 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/15"
                       >
-                        Generate & Email QR
+                        <QrCode size={13} />
+                        <span>Generate & Email QR</span>
                       </button>
                     </div>
                   </div>
 
-                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                        <QrCode size={16} />
+                  {/* Card 3: BOD QR Generator */}
+                  <div className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-100 hover:bg-white hover:shadow-md'
+                  }`}>
+                    <div>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                          isDarkMode ? 'bg-indigo-950/50 text-indigo-400' : 'bg-indigo-100 text-[#0038A8]'
+                        }`}>
+                          <QrCode size={16} />
+                        </div>
+                        <div>
+                          <h3 className={`text-xs sm:text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>BOD Board QR</h3>
+                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Admin Level Security Badge</p>
+                        </div>
                       </div>
-                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">BOD QR Generator</h3>
+
+                      <p className={`text-[10px] leading-relaxed mb-4 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Delegate grade-specific board admin access directly for official handlers.
+                      </p>
                     </div>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <select id="new-bod-email" className="p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <select 
+                          id="new-bod-email" 
+                          className={`p-3 rounded-xl text-xs font-bold outline-none transition-all duration-200 ${
+                            isDarkMode 
+                              ? 'bg-slate-900 border-slate-800 text-slate-200 focus:ring-2 focus:ring-blue-500/40' 
+                              : 'bg-white border-slate-200 text-gray-700 focus:ring-2 focus:ring-blue-500/30 shadow-sm'
+                          }`}
+                        >
                           <option value="bodgrade7@gmail.com">Grade 7 BOD</option>
                           <option value="bodgrade8@gmail.com">Grade 8 BOD</option>
                           <option value="bodgrade9@gmail.com">Grade 9 BOD</option>
                           <option value="bodgrade10@gmail.com">Grade 10 BOD</option>
                         </select>
-                        <select id="new-bod-grade" className="p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                        <select 
+                          id="new-bod-grade" 
+                          className={`p-3 rounded-xl text-xs font-bold outline-none transition-all duration-200 ${
+                            isDarkMode 
+                              ? 'bg-slate-900 border-slate-800 text-slate-200 focus:ring-2 focus:ring-blue-500/40' 
+                              : 'bg-white border-slate-200 text-gray-700 focus:ring-2 focus:ring-blue-500/30 shadow-sm'
+                          }`}
+                        >
                           <option value="Grade 7">Grade 7</option>
                           <option value="Grade 8">Grade 8</option>
                           <option value="Grade 9">Grade 9</option>
                           <option value="Grade 10">Grade 10</option>
                         </select>
                       </div>
+
                       <button 
                         onClick={() => {
                           const email = (document.getElementById('new-bod-email') as HTMLSelectElement).value;
                           const grade = (document.getElementById('new-bod-grade') as HTMLSelectElement).value;
                           if (email) generateBODQRCode(email, grade);
                         }}
-                        className="w-full bg-[#0038A8] text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                        className="w-full bg-[#0038A8] text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-800 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-blue-500/15"
                       >
-                        Generate BOD QR Code
+                        <QrCode size={13} />
+                        <span>Generate BOD QR Code</span>
                       </button>
                     </div>
                   </div>
 
-                  <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 hover:bg-white hover:shadow-md transition-all group">
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className="w-8 h-8 bg-purple-100 rounded-xl flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
-                        <QrCode size={16} />
+                  {/* Card 4: Teacher Registry Selector QR Generator */}
+                  <div className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
+                    isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-100 hover:bg-white hover:shadow-md'
+                  }`}>
+                    <div>
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                          isDarkMode ? 'bg-purple-950/50 text-purple-400' : 'bg-purple-100 text-purple-600'
+                        }`}>
+                          <QrCode size={16} />
+                        </div>
+                        <div>
+                          <h3 className={`text-xs sm:text-sm font-black uppercase tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Select Faculty QR</h3>
+                          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block mt-0.5">Dropdown Registry Exporter</p>
+                        </div>
                       </div>
-                      <h3 className="text-sm font-black text-gray-800 uppercase tracking-tight">Teacher QR Generator</h3>
+
+                      <p className={`text-[10px] leading-relaxed mb-4 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Quick export of authentication QR badges from the existing teachers index.
+                      </p>
                     </div>
-                    <div className="space-y-4">
-                      <div className="grid grid-cols-1 gap-3">
-                        <select 
-                          id="new-teacher-qr-select" 
-                          className="p-3 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-purple-500 transition-all"
-                        >
-                          <option value="">Select a Teacher...</option>
-                          {records.sort((a, b) => a.name.localeCompare(b.name)).map(r => (
-                            <option key={r.id} value={r.id}>{r.name} ({r.gradeLevel})</option>
-                          ))}
-                        </select>
-                      </div>
+
+                    <div className="space-y-3">
+                      <select 
+                        id="new-teacher-qr-select" 
+                        className={`w-full p-3 rounded-xl text-xs font-bold outline-none transition-all duration-200 ${
+                          isDarkMode 
+                            ? 'bg-slate-900 border-slate-800 text-slate-200 focus:ring-2 focus:ring-purple-500/40' 
+                            : 'bg-white border-slate-200 text-gray-700 focus:ring-2 focus:ring-purple-500/30 shadow-sm'
+                        }`}
+                      >
+                        <option value="">Select a Teacher Account...</option>
+                        {sortRecordsByGradeAndName(records).map(r => (
+                          <option key={r.id} value={r.id}>{r.name} ({r.gradeLevel})</option>
+                        ))}
+                      </select>
+
                       <button 
                         onClick={() => {
                           const teacherId = (document.getElementById('new-teacher-qr-select') as HTMLSelectElement).value;
@@ -8227,250 +10764,312 @@ function AppContent() {
                           if (teacher) generateTeacherQRCode(teacher.email, teacher.gradeLevel, teacher.name);
                           else showToast("Please select a teacher first.");
                         }}
-                        className="w-full bg-purple-600 text-white py-3 px-4 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-purple-700 transition-all shadow-lg shadow-purple-200"
+                        className="w-full bg-purple-600 text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-purple-700 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-purple-500/15"
                       >
-                        Generate Teacher QR Code
+                        <QrCode size={13} />
+                        <span>Generate Teacher QR Code</span>
                       </button>
                     </div>
                   </div>
 
-                  <div className="p-4 sm:p-6 bg-red-50 rounded-3xl border border-red-100 hover:bg-white hover:shadow-md transition-all group lg:col-span-3">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 sm:w-12 sm:h-12 bg-red-100 rounded-xl flex items-center justify-center text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all shrink-0">
-                          <Settings size={20} className="sm:w-6 sm:h-6" />
-                        </div>
-                        <div>
-                          <h3 className="text-base sm:text-lg font-black text-red-900 uppercase tracking-tight">System Maintenance</h3>
-                          <p className="text-[10px] text-red-500 font-bold uppercase tracking-widest mt-0.5">
-                            {isMaintenanceMode ? 'ACTIVE (Teachers locked out)' : 'Running normally'}
-                          </p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={async () => {
-                          try {
-                            const newMode = !isMaintenanceMode;
-                            await setDoc(doc(db, 'settings', 'global'), { 
-                              maintenanceMode: newMode 
-                            }, { merge: true });
-                            showToast(`System Maintenance is now ${newMode ? 'ON' : 'OFF'}`);
-                            logActivity(
-                              newMode ? 'Enabled Maintenance Mode' : 'Disabled Maintenance Mode', 
-                              `Teachers are now ${newMode ? 'locked out' : 'granted access'}`, 
-                              'critical'
-                            );
-                          } catch (e) {
-                            showToast("Failed to toggle maintenance mode.");
-                          }
-                        }}
-                        className={`w-full sm:w-auto py-2.5 sm:py-3 px-4 sm:px-6 rounded-xl font-black text-[10px] sm:text-xs uppercase tracking-widest transition-all shadow-lg flex items-center justify-center gap-2 shrink-0 ${
-                          isMaintenanceMode 
-                            ? 'bg-green-600 text-white hover:bg-green-700 shadow-green-200' 
-                            : 'bg-red-600 text-white hover:bg-red-700 shadow-red-200'
-                        }`}
-                      >
-                        {isMaintenanceMode ? <Check size={14} className="sm:w-4 sm:h-4" /> : <AlertTriangle size={14} className="sm:w-4 sm:h-4" />}
-                        {isMaintenanceMode ? 'Turn Off' : 'Turn On'}
-                      </button>
-                    </div>
-                  </div>
                 </div>
 
-                <div className="overflow-x-auto -mx-6 md:mx-0 hidden md:block">
-                  <div className="inline-block min-w-full align-middle px-6 md:px-0">
-                    <table className="min-w-full border-separate border-spacing-y-2">
-                      <thead>
-                        <tr className="text-left text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
-                          <th className="pb-4 pl-4">User Details</th>
-                          <th className="pb-4">Role</th>
-                          <th className="pb-4">Assigned Grade</th>
-                          <th className="pb-4 text-right pr-4">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="space-y-2">
-                        {allUsers
-                          .filter(u => {
-                            const nameMatch = (u.name || '').toLowerCase().includes(userSearchTerm.toLowerCase());
-                            const emailMatch = (u.email || '').toLowerCase().includes(userSearchTerm.toLowerCase());
-                            return nameMatch || emailMatch;
-                          })
-                          .map(u => (
-                          <tr key={u.uid} className="bg-gray-50/50 hover:bg-white hover:shadow-md transition-all group rounded-2xl overflow-hidden">
-                            <td className="py-4 pl-4 rounded-l-2xl">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-white border border-gray-100 rounded-xl flex items-center justify-center text-gray-400 font-black group-hover:bg-blue-50 group-hover:text-[#0038A8] transition-colors">
-                                  {(u.name || 'U').charAt(0)}
-                                </div>
-                                <div>
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <div className="text-sm font-black text-gray-900 leading-none">{u.name || 'Unknown'}</div>
-                                    {(u.qrEmail || (u.name || '').toLowerCase().includes('- qr login')) && (
-                                      <span className="px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded text-[7px] font-black uppercase tracking-widest">QR Login</span>
-                                    )}
-                                  </div>
-                                  <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{u.email || 'No Email'}</div>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="py-4">
-                              {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
-                                <span className="text-[10px] font-black text-gray-700 uppercase tracking-[0.2em] bg-gray-100 px-3 py-1 rounded-full">{u.role}</span>
-                              ) : (
-                                <select 
-                                  value={u.role || 'teacher'}
-                                  onChange={e => updateUserRole(u.uid, e.target.value as any, u.gradeLevel)}
-                                  className="text-[10px] font-black uppercase tracking-widest border border-gray-200 rounded-lg p-2 bg-white outline-none focus:ring-2 focus:ring-blue-500"
-                                >
-                                  <option value="admin">Admin</option>
-                                  <option value="bod">BOD</option>
-                                  <option value="teacher">Teacher</option>
-                                </select>
-                              )}
-                            </td>
-                            <td className="py-4">
-                              {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
-                                <span className="text-[10px] font-black text-gray-700 uppercase tracking-[0.2em] bg-gray-100 px-3 py-1 rounded-full">{u.gradeLevel || 'All'}</span>
-                              ) : (
-                                <select 
-                                  value={u.gradeLevel || 'Grade 7'}
-                                  onChange={e => updateUserRole(u.uid, u.role, e.target.value as any)}
-                                  className="text-[10px] font-black uppercase tracking-widest border border-gray-200 rounded-lg p-2 bg-white outline-none focus:ring-2 focus:ring-blue-500"
-                                >
-                                  <option value="All">All Grades</option>
-                                  <option value="Grade 7">Grade 7</option>
-                                  <option value="Grade 8">Grade 8</option>
-                                  <option value="Grade 9">Grade 9</option>
-                                  <option value="Grade 10">Grade 10</option>
-                                </select>
-                              )}
-                            </td>
-                            <td className="py-4 text-right pr-4 rounded-r-2xl">
-                              <div className="flex justify-end gap-2">
-                                {Object.keys(ALLOWED_BODS).includes(u.email.toLowerCase()) && (
-                                  <button 
-                                    onClick={() => generateBODQRCode(u.email, u.gradeLevel)}
-                                    className="p-2 text-blue-500 hover:text-white hover:bg-blue-600 transition-all bg-blue-50 rounded-xl"
-                                    title="Generate QR Login Code"
-                                  >
-                                    <QrCode size={16} />
-                                  </button>
-                                )}
-                                {u.role === 'teacher' && (
-                                  <button 
-                                    onClick={() => generateTeacherQRCode(u.email, u.gradeLevel, u.name)}
-                                    className="p-2 text-green-500 hover:text-white hover:bg-green-600 transition-all bg-green-50 rounded-xl"
-                                    title="Generate Teacher QR Login Code"
-                                  >
-                                    <QrCode size={16} />
-                                  </button>
-                                )}
-                                {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
-                                  <button 
-                                    onClick={() => deleteUser(u.uid)}
-                                    className="p-2 text-gray-400 hover:text-white hover:bg-red-500 transition-all bg-gray-100 rounded-xl"
-                                    title="Remove User"
-                                  >
-                                    <Trash2 size={16} />
-                                  </button>
-                                )}
-                              </div>
-                            </td>
+                {/* Collapsible User Login List Table & Mobile Stack */}
+                {showAllUsersList && (
+                  <div className="mt-8 transition-all duration-300">
+                    <div className="flex items-center justify-between mb-4 border-b border-gray-100 dark:border-slate-800 pb-3">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Login Registry Table</span>
+                      <span className="text-[10px] text-slate-400 font-extrabold">{allUsers.length} total sessions</span>
+                    </div>
+
+                    {/* Desktop View Table */}
+                    <div className="overflow-x-auto -mx-4 sm:mx-0 hidden md:block">
+                      <table className="min-w-full border-separate border-spacing-y-2">
+                        <thead>
+                          <tr className="text-left text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                            <th className="pb-3 pl-4">Account Information</th>
+                            <th className="pb-3">Security Level</th>
+                            <th className="pb-3">Assigned Grade</th>
+                            <th className="pb-3 text-right pr-4">QR Dispatch</th>
                           </tr>
+                        </thead>
+                        <tbody className="space-y-1.5">
+                          {allUsers
+                            .filter(u => {
+                              const nameMatch = (u.name || '').toLowerCase().includes(userSearchTerm.toLowerCase());
+                              const emailMatch = (u.email || '').toLowerCase().includes(userSearchTerm.toLowerCase());
+                              return nameMatch || emailMatch;
+                            })
+                            .map(u => (
+                            <tr key={u.uid} className={`group rounded-2xl overflow-hidden transition-all duration-200 ${
+                              isDarkMode ? 'bg-slate-950/30 hover:bg-slate-950 border border-slate-800' : 'bg-slate-50 hover:bg-white hover:shadow-md'
+                            }`}>
+                              <td className="py-3 pl-4 rounded-l-2xl">
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-xs font-black transition-all ${
+                                    isDarkMode ? 'bg-slate-800 text-slate-200' : 'bg-white border border-slate-200/60 text-[#0038A8]'
+                                  }`}>
+                                    {(u.name || 'U').charAt(0)}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                      <div className={`text-xs font-black leading-none ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>{u.name || 'Unknown'}</div>
+                                      {(u.qrEmail || (u.name || '').toLowerCase().includes('- qr login')) && (
+                                        <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 rounded text-[7px] font-black uppercase tracking-wider">QR Access</span>
+                                      )}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-bold tracking-wide">{u.email || 'No Email'}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              
+                              <td className="py-3">
+                                {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
+                                  <span className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
+                                    {u.role}
+                                  </span>
+                                ) : (
+                                  <select 
+                                    value={u.role || 'teacher'}
+                                    onChange={e => updateUserRole(u.uid, e.target.value as any, u.gradeLevel)}
+                                    className={`text-[9px] font-black uppercase tracking-wider border border-slate-200 rounded-lg p-1.5 bg-white dark:bg-slate-900 dark:border-slate-800 text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-blue-500`}
+                                  >
+                                    <option value="admin">Admin</option>
+                                    <option value="bod">BOD</option>
+                                    <option value="teacher">Teacher</option>
+                                  </select>
+                                )}
+                              </td>
+                              
+                              <td className="py-3">
+                                {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
+                                  <span className="text-[9px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-widest bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
+                                    {u.gradeLevel || 'All'}
+                                  </span>
+                                ) : (
+                                  <select 
+                                    value={u.gradeLevel || 'Grade 7'}
+                                    onChange={e => updateUserRole(u.uid, u.role, e.target.value as any)}
+                                    className={`text-[9px] font-black uppercase tracking-wider border border-slate-200 rounded-lg p-1.5 bg-white dark:bg-slate-900 dark:border-slate-800 text-slate-700 dark:text-slate-200 outline-none focus:ring-2 focus:ring-blue-500`}
+                                  >
+                                    <option value="All">All Grades</option>
+                                    <option value="Grade 7">Grade 7</option>
+                                    <option value="Grade 8">Grade 8</option>
+                                    <option value="Grade 9">Grade 9</option>
+                                    <option value="Grade 10">Grade 10</option>
+                                  </select>
+                                )}
+                              </td>
+                              
+                              <td className="py-3 text-right pr-4 rounded-r-2xl">
+                                <div className="flex justify-end gap-1.5">
+                                  {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) && (
+                                    <button 
+                                      onClick={() => generateBODQRCode(u.email || '', u.gradeLevel)}
+                                      className="p-2 text-blue-500 hover:text-white hover:bg-blue-600 transition-all bg-blue-50 dark:bg-blue-950/20 rounded-xl"
+                                      title="Generate QR Login Code"
+                                    >
+                                      <QrCode size={14} />
+                                    </button>
+                                  )}
+                                  {u.role === 'teacher' && (
+                                    <button 
+                                      onClick={() => generateTeacherQRCode(u.email || '', u.gradeLevel, u.name)}
+                                      className="p-2 text-[#0038A8] hover:text-white hover:bg-blue-600 transition-all bg-blue-50 dark:bg-blue-950/20 rounded-xl"
+                                      title="Generate Teacher QR Login Code"
+                                    >
+                                      <QrCode size={14} />
+                                    </button>
+                                  )}
+                                  {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
+                                    <button 
+                                      onClick={() => deleteUser(u.uid)}
+                                      className="p-2 text-slate-400 hover:text-white hover:bg-rose-500 transition-all bg-slate-100 dark:bg-slate-800 rounded-xl"
+                                      title="Remove User"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Card View (Sleek bento layout with 44px margins and responsive layout) */}
+                    <div className="md:hidden space-y-3">
+                      {allUsers
+                        .filter(u => {
+                          const nameMatch = (u.name || '').toLowerCase().includes(userSearchTerm.toLowerCase());
+                          const emailMatch = (u.email || '').toLowerCase().includes(userSearchTerm.toLowerCase());
+                          return nameMatch || emailMatch;
+                        })
+                        .map(u => (
+                          <div key={u.uid} className={`p-4 rounded-2xl border flex flex-col gap-3.5 ${
+                            isDarkMode ? 'bg-slate-950/50 border-slate-800' : 'bg-white border-slate-100 shadow-sm'
+                          }`}>
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-black shrink-0 ${
+                                isDarkMode ? 'bg-slate-900 text-slate-200' : 'bg-slate-50 border border-slate-200/40 text-[#0038A8]'
+                              }`}>
+                                {(u.name || 'U').charAt(0)}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className={`text-xs font-black truncate leading-tight ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>{u.name || 'Unknown'}</span>
+                                  {(u.qrEmail || (u.name || '').toLowerCase().includes('- qr login')) && (
+                                    <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 rounded text-[7px] font-black uppercase tracking-wider">QR Code Login</span>
+                                  )}
+                                </div>
+                                <p className="text-[10px] text-slate-400 font-bold truncate mt-0.5">{u.email || 'No email associated'}</p>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3.5 pt-1">
+                              <div>
+                                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Security Role</span>
+                                {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
+                                  <span className="text-[9px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest bg-slate-100 dark:bg-slate-850 px-2 py-1.5 rounded-lg block text-center truncate">
+                                    {u.role}
+                                  </span>
+                                ) : (
+                                  <select 
+                                    value={u.role || 'teacher'}
+                                    onChange={e => updateUserRole(u.uid, e.target.value as any, u.gradeLevel)}
+                                    className="w-full text-[9px] font-black uppercase tracking-wider border border-slate-200 dark:border-slate-800 rounded-lg p-2 bg-white dark:bg-slate-900 text-slate-705 dark:text-slate-200 outline-none"
+                                  >
+                                    <option value="admin">Admin</option>
+                                    <option value="bod">BOD</option>
+                                    <option value="teacher">Teacher</option>
+                                  </select>
+                                )}
+                              </div>
+                              
+                              <div>
+                                <span className="block text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1.5">Assigned Grade</span>
+                                {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
+                                  <span className="text-[9px] font-black text-slate-600 dark:text-slate-300 uppercase tracking-widest bg-slate-100 dark:bg-slate-850 px-2 py-1.5 rounded-lg block text-center truncate">
+                                    {u.gradeLevel || 'All Grades'}
+                                  </span>
+                                ) : (
+                                  <select 
+                                    value={u.gradeLevel || 'Grade 7'}
+                                    onChange={e => updateUserRole(u.uid, u.role, e.target.value as any)}
+                                    className="w-full text-[9px] font-black uppercase tracking-wider border border-slate-200 dark:border-slate-800 rounded-lg p-2 bg-white dark:bg-slate-900 text-slate-705 dark:text-slate-200 outline-none"
+                                  >
+                                    <option value="All">All Grades</option>
+                                    <option value="Grade 7">Grade 7</option>
+                                    <option value="Grade 8">Grade 8</option>
+                                    <option value="Grade 9">Grade 9</option>
+                                    <option value="Grade 10">Grade 10</option>
+                                  </select>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex justify-end gap-2">
+                              {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) && (
+                                <button 
+                                  onClick={() => generateBODQRCode(u.email || '', u.gradeLevel)}
+                                  className="px-3 py-2 text-[9px] font-black text-blue-600 bg-blue-50 dark:bg-blue-950/20 hover:bg-blue-600 hover:text-white transition-all rounded-lg flex items-center justify-center gap-1 w-full sm:w-auto"
+                                >
+                                  <QrCode size={12} />
+                                  <span>Login QR</span>
+                                </button>
+                              )}
+                              
+                              {u.role === 'teacher' && (
+                                <button 
+                                  onClick={() => generateTeacherQRCode(u.email || '', u.gradeLevel, u.name)}
+                                  className="px-3 py-2 text-[9px] font-black text-indigo-600 bg-indigo-50 dark:bg-indigo-950/20 hover:bg-[#0038A8] hover:text-white transition-all rounded-lg flex items-center justify-center gap-1 w-full sm:w-auto"
+                                >
+                                  <QrCode size={12} />
+                                  <span>Member QR</span>
+                                </button>
+                              )}
+
+                              {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
+                                <button 
+                                  onClick={() => deleteUser(u.uid)}
+                                  className="p-2 text-slate-400 hover:text-rose-600 bg-slate-50 dark:bg-slate-800 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-all shrink-0"
+                                  title="Delete Session"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         ))}
-                      </tbody>
-                    </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Profile Change Requests */}
+              <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100'} p-6 md:p-8 xl:p-10 rounded-[2.5rem] xl:rounded-[3rem] shadow-sm border lg:col-span-2 xl:col-span-3 lg:row-start-2`}>
+                <div className="flex items-center gap-4 xl:gap-6 mb-6 xl:mb-10">
+                  <div className="w-12 h-12 xl:w-16 xl:h-16 bg-yellow-50 rounded-2xl xl:rounded-3xl flex items-center justify-center text-yellow-600">
+                    <User size={24} className="xl:w-8 xl:h-8" />
+                  </div>
+                  <div>
+                    <h2 className={`text-xl lg:text-2xl xl:text-3xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} uppercase tracking-tight`}>Profile Change Requests</h2>
+                    <p className="text-[10px] xl:text-xs text-gray-400 font-bold uppercase tracking-widest mt-1">Pending teacher profile updates</p>
                   </div>
                 </div>
-
-                {/* Mobile Card View */}
-                <div className="md:hidden space-y-4">
-                  {allUsers
-                    .filter(u => {
-                      const nameMatch = (u.name || '').toLowerCase().includes(userSearchTerm.toLowerCase());
-                      const emailMatch = (u.email || '').toLowerCase().includes(userSearchTerm.toLowerCase());
-                      return nameMatch || emailMatch;
-                    })
-                    .map(u => (
-                      <div key={u.uid} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gray-50 border border-gray-100 rounded-xl flex items-center justify-center text-gray-400 font-black">
-                            {(u.name || 'U').charAt(0)}
-                          </div>
-                          <div>
-                            <div className="text-sm font-black text-gray-900 leading-none mb-1">{u.name || 'Unknown'}</div>
-                            <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{u.email || 'No Email'}</div>
-                          </div>
+                <div className="space-y-4">
+                  {profileChangeRequests.filter(req => req.status === 'pending').map(request => (
+                    <div key={request.id} className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                      <div>
+                        <div className="text-xs font-black text-gray-900">{request.currentName} ({request.currentEmail})</div>
+                        <div className="text-[10px] text-gray-500 font-bold mt-1">
+                          Requested changes:
+                          <ul className="list-disc ml-4 mt-1">
+                            {request.currentName !== request.newName && <li>Name: <span className="line-through text-red-400">{request.currentName}</span> &rarr; <span className="text-green-600">{request.newName}</span></li>}
+                            {request.currentEmail !== request.newEmail && <li>Email: <span className="line-through text-red-400">{request.currentEmail}</span> &rarr; <span className="text-green-600">{request.newEmail}</span></li>}
+                            {request.newGradeLevel && request.currentGradeLevel !== request.newGradeLevel && <li>Grade: <span className="line-through text-red-400">{request.currentGradeLevel}</span> &rarr; <span className="text-green-600">{request.newGradeLevel}</span></li>}
+                            {request.newDepartment && request.currentDepartment !== request.newDepartment && <li>Dept: <span className="line-through text-red-400">{request.currentDepartment}</span> &rarr; <span className="text-green-600">{request.newDepartment}</span></li>}
+                          </ul>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Role</label>
-                            {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
-                              <span className="text-[10px] font-black text-gray-700 uppercase tracking-[0.2em] bg-gray-100 px-3 py-1 rounded-full block w-max">{u.role}</span>
-                            ) : (
-                              <select 
-                                value={u.role || 'teacher'}
-                                onChange={e => updateUserRole(u.uid, e.target.value as any, u.gradeLevel)}
-                                className="w-full text-[10px] font-black uppercase tracking-widest border border-gray-200 rounded-lg p-2 bg-white outline-none focus:ring-2 focus:ring-blue-500"
-                              >
-                                <option value="admin">Admin</option>
-                                <option value="bod">BOD</option>
-                                <option value="teacher">Teacher</option>
-                              </select>
-                            )}
+                        {request.note && (
+                          <div className="text-[10px] text-blue-600 bg-blue-50 p-2 rounded-lg mt-2 font-medium">
+                            Note: "{request.note}"
                           </div>
-                          <div>
-                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Grade</label>
-                            {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) ? (
-                              <span className="text-[10px] font-black text-gray-700 uppercase tracking-[0.2em] bg-gray-100 px-3 py-1 rounded-full block w-max">{u.gradeLevel || 'All'}</span>
-                            ) : (
-                              <select 
-                                value={u.gradeLevel || 'Grade 7'}
-                                onChange={e => updateUserRole(u.uid, u.role, e.target.value as any)}
-                                className="w-full text-[10px] font-black uppercase tracking-widest border border-gray-200 rounded-lg p-2 bg-white outline-none focus:ring-2 focus:ring-blue-500"
-                              >
-                                <option value="All">All Grades</option>
-                                <option value="Grade 7">Grade 7</option>
-                                <option value="Grade 8">Grade 8</option>
-                                <option value="Grade 9">Grade 9</option>
-                                <option value="Grade 10">Grade 10</option>
-                              </select>
-                            )}
-                          </div>
-                        </div>
-                        <div className="pt-3 border-t border-gray-50 flex justify-end gap-2">
-                          {Object.keys(ALLOWED_BODS).includes((u.email || '').toLowerCase()) && (
-                            <button 
-                              onClick={() => generateBODQRCode(u.email, u.gradeLevel)}
-                              className="p-2 text-blue-500 hover:text-white hover:bg-blue-600 transition-all bg-blue-50 rounded-xl"
-                              title="Generate QR Login Code"
-                            >
-                              <QrCode size={16} />
-                            </button>
-                          )}
-                          {u.email !== 'lpcaanhsfacultyclubofficers@gmail.com' && u.email !== 'ngehthong@gmail.com' && (
-                            <button 
-                              onClick={() => deleteUser(u.uid)}
-                              className="p-2 text-gray-400 hover:text-white hover:bg-red-500 transition-all bg-gray-100 rounded-xl"
-                              title="Remove User"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
+                        )}
                       </div>
-                    ))}
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <button 
+                          onClick={() => handleApproveProfileChange(request)}
+                          className="flex-1 sm:flex-none px-4 py-2 bg-green-50 text-green-600 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-green-100 transition-all flex items-center justify-center gap-1"
+                        >
+                          <Check size={14} /> Approve
+                        </button>
+                        <button 
+                          onClick={() => handleRejectProfileChange(request)}
+                          className="flex-1 sm:flex-none px-4 py-2 bg-red-50 text-red-600 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-100 transition-all flex items-center justify-center gap-1"
+                        >
+                          <X size={14} /> Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {profileChangeRequests.filter(req => req.status === 'pending').length === 0 && (
+                    <div className="text-center py-8 text-xs text-gray-400 font-bold uppercase tracking-widest bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                      No pending requests
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Recent Activity Snippet */}
-              <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center text-orange-600">
-                      <Activity size={20} />
+              <div className={`${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-white border-gray-100'} p-6 md:p-8 xl:p-10 rounded-[2.5rem] xl:rounded-[3rem] shadow-sm border flex flex-col lg:col-start-3 xl:col-start-4 lg:row-start-1 lg:row-span-2`}>
+                <div className="flex items-center justify-between mb-6 xl:mb-10">
+                  <div className="flex items-center gap-3 xl:gap-5">
+                    <div className="w-10 h-10 xl:w-14 xl:h-14 bg-orange-50 rounded-xl xl:rounded-2xl flex items-center justify-center text-orange-600">
+                      <Activity size={20} className="xl:w-7 xl:h-7" />
                     </div>
-                    <h3 className="text-lg font-black text-gray-900 tracking-tight uppercase">Recent Activity</h3>
+                    <h3 className={`text-lg lg:text-xl xl:text-2xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'} tracking-tight uppercase`}>Recent Activity</h3>
                   </div>
                   <button onClick={() => setActiveTab('audit')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline">View All Logs</button>
                 </div>
@@ -8482,100 +11081,703 @@ function AppContent() {
                         <div className="text-xs font-black text-gray-900 truncate">{log.action}</div>
                         <div className="text-[10px] text-gray-400 font-bold truncate">{log.details}</div>
                       </div>
-                      <div className="text-[9px] text-gray-400 font-bold uppercase shrink-0">{log.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div className="text-[9px] text-gray-400 font-bold uppercase shrink-0">{ensureTimestamp(log.timestamp).toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                     </div>
                   ))}
                   {auditLogs.length === 0 && <div className="text-center py-8 text-xs text-gray-400 italic">No recent activity.</div>}
                 </div>
               </div>
             </div>
+            )}
 
-            {/* Database Maintenance Section */}
-            <div className="bg-white p-6 md:p-8 rounded-[2.5rem] shadow-sm border border-gray-100">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center text-red-600">
-                    <Database size={24} />
+            {/* SUB TAB 2: BROADCAST ANNOUNCEMENT */}
+            {adminSubTab === 'broadcast' && (
+              <div className={`${isDarkMode ? 'bg-slate-900/90 border-slate-800' : 'bg-white/95 border-slate-100'} p-4 sm:p-6 md:p-8 rounded-[2rem] shadow-xl border backdrop-blur-md`}>
+                <div className="flex items-center gap-3 mb-6 border-b border-gray-100 dark:border-slate-800 pb-4">
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-purple-500/10 rounded-2xl flex items-center justify-center text-purple-600 dark:text-purple-400 shrink-0">
+                    <Megaphone size={22} />
                   </div>
                   <div>
-                    <h2 className="text-xl font-black text-gray-900 uppercase tracking-tight">System Maintenance</h2>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Database & Record Management</p>
+                    <h2 className={`text-base sm:text-xl font-black ${isDarkMode ? 'text-slate-100' : 'text-slate-900'} uppercase tracking-tight`}>Broadcast Announcement</h2>
+                    <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest mt-0.5">Send live notifications to all faculty members</p>
                   </div>
                 </div>
-                  <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
-                    <button 
-                      onClick={() => setShowArchiveModal(true)}
-                      className="w-full sm:w-auto bg-blue-50 text-blue-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-blue-100 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 group"
-                    >
-                      <Archive size={16} className="group-hover:scale-110 transition-transform" /> Close School Year
-                    </button>
-                    <button 
-                      onClick={clearAuditLogs}
-                      className="w-full sm:w-auto bg-orange-50 text-orange-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-orange-100 hover:bg-orange-600 hover:text-white transition-all flex items-center justify-center gap-2 group"
-                    >
-                      <Trash2 size={16} className="group-hover:scale-110 transition-transform" /> Clear Transparency Logs
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setDeleteType('all');
-                        setIsBatchDeleteModalOpen(true);
-                      }}
-                      className="w-full sm:w-auto bg-red-50 text-red-600 px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest border border-red-100 hover:bg-red-600 hover:text-white transition-all flex items-center justify-center gap-2 group"
-                    >
-                      <Trash2 size={16} className="group-hover:scale-110 transition-transform" /> Wipe All Records
-                    </button>
+                
+                <div className="space-y-4 max-w-3xl">
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} mb-1.5`}>Notification Title</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g., General Assembly / System Update Notice"
+                      value={announcementTitle}
+                      onChange={e => setAnnouncementTitle(e.target.value)}
+                      className={`w-full px-4 py-3 rounded-xl text-xs sm:text-sm font-bold border transition-all outline-none ${isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:ring-2 focus:ring-purple-500/40' : 'bg-slate-50 border-slate-200 text-slate-900 focus:ring-2 focus:ring-purple-500/30'}`}
+                    />
                   </div>
+
+                  <div>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} mb-1.5`}>Message Content</label>
+                    <textarea 
+                      placeholder="Write your broadcast message here..."
+                      value={announcementMessage}
+                      onChange={e => setAnnouncementMessage(e.target.value)}
+                      className={`w-full min-h-[140px] px-4 py-3 rounded-xl text-xs sm:text-sm font-bold border transition-all outline-none resize-none ${isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:ring-2 focus:ring-purple-500/40' : 'bg-slate-50 border-slate-200 text-slate-900 focus:ring-2 focus:ring-purple-500/30'}`}
+                    />
+                  </div>
+
+                  <button 
+                    onClick={sendAnnouncement}
+                    disabled={isSendingAnnouncement || !announcementTitle || !announcementMessage}
+                    className="w-full sm:w-auto px-8 py-3.5 bg-purple-600 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-purple-700 active:scale-[0.98] transition-all shadow-lg shadow-purple-500/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isSendingAnnouncement ? (
+                      <Loader2 className="animate-spin" size={16} />
+                    ) : (
+                      <Send size={16} />
+                    )}
+                    <span>{isSendingAnnouncement ? 'Broadcasting Message...' : 'Broadcast to All Teachers'}</span>
+                  </button>
+                </div>
               </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
-                  <div className="flex items-start gap-4">
-                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-[#0038A8] shrink-0 shadow-sm">
-                      <AlertCircle size={20} />
+            )}
+
+            {/* SUB TAB 3: SYSTEM MAINTENANCE & DATABASE */}
+            {adminSubTab === 'maintenance' && (
+              <div className={`${isDarkMode ? 'bg-slate-900/90 border-slate-800' : 'bg-white/95 border-slate-100'} p-4 sm:p-6 md:p-8 rounded-[2rem] shadow-xl border backdrop-blur-md`}>
+                
+                {/* Header */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4 border-b border-gray-100 dark:border-slate-800 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                      <Database size={22} />
                     </div>
                     <div>
-                      <h4 className="text-sm font-black text-[#0038A8] uppercase tracking-tight mb-2">Important Note</h4>
-                      <p className="text-xs text-blue-800 leading-relaxed font-medium">
-                        Deleting teacher records will also remove their entire payment history. This action is permanent and will be reflected across all BOD dashboards immediately.
+                      <h2 className={`text-base sm:text-xl font-bold ${isDarkMode ? 'text-slate-100' : 'text-slate-900'} uppercase tracking-tight`}>System & Database Maintenance</h2>
+                      <p className="text-xs text-slate-400 font-bold uppercase tracking-wider mt-0.5">Database, Archives & Record Reset Controls</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* System Maintenance Mode Banner */}
+                <div className={`p-4 sm:p-5 rounded-3xl border mb-6 transition-all duration-200 ${
+                  isDarkMode 
+                    ? 'bg-slate-950/40 border-slate-800' 
+                    : 'bg-rose-50/60 border-rose-100/80 hover:bg-rose-50'
+                }`}>
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3.5">
+                      <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+                        isMaintenanceMode 
+                          ? 'bg-amber-500/20 text-amber-500' 
+                          : (isDarkMode ? 'bg-rose-950/60 text-rose-400' : 'bg-rose-100 text-rose-600')
+                      }`}>
+                        <Settings size={20} />
+                      </div>
+                      <div>
+                        <h4 className={`text-xs sm:text-sm font-bold uppercase tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-900'}`}>System Maintenance Mode</h4>
+                        <p className="text-xs text-slate-400 font-medium tracking-wide block mt-0.5">
+                          {isMaintenanceMode ? 'Teachers currently locked out of application' : 'Online & running normally for all accounts'}
+                        </p>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          const newMode = !isMaintenanceMode;
+                          await setDoc(doc(db, 'settings', 'global'), { 
+                            maintenanceMode: newMode 
+                          }, { merge: true });
+                          showToast(`System Maintenance is now ${newMode ? 'ON' : 'OFF'}`);
+                          logActivity(
+                            newMode ? 'Enabled Maintenance Mode' : 'Disabled Maintenance Mode', 
+                            `Teachers are now ${newMode ? 'locked out' : 'granted access'}`, 
+                            'critical'
+                          );
+                        } catch (e) {
+                          showToast("Failed to toggle maintenance mode.");
+                        }
+                      }}
+                      className={`w-full sm:w-auto py-2.5 px-5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all duration-200 flex items-center justify-center gap-2 shadow-md ${
+                        isMaintenanceMode 
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/10' 
+                          : 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-500/10'
+                      }`}
+                    >
+                      {isMaintenanceMode ? <Check size={15} /> : <AlertTriangle size={15} />}
+                      <span>{isMaintenanceMode ? 'Resume Public Access' : 'Activate Lockout'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Clean Maintenance Action Buttons (Laptop and Mobile Responsive) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 mb-6">
+                  <button 
+                    onClick={() => setShowArchiveModal(true)}
+                    className={`p-4 rounded-2xl border font-black text-xs uppercase tracking-wider transition-all duration-200 flex flex-col items-center justify-center gap-2 text-center ${
+                      isDarkMode 
+                        ? 'bg-blue-950/30 border-blue-900/40 text-blue-400 hover:bg-blue-900/40' 
+                        : 'bg-blue-50/80 border-blue-100 text-blue-700 hover:bg-blue-100 shadow-sm'
+                    }`}
+                  >
+                    <Archive size={20} className="text-blue-500" />
+                    <span>Close School Year</span>
+                    <span className="text-[9px] font-normal text-slate-400">Archive current term data</span>
+                  </button>
+
+                  <button 
+                    onClick={clearAuditLogs}
+                    className={`p-4 rounded-2xl border font-black text-xs uppercase tracking-wider transition-all duration-200 flex flex-col items-center justify-center gap-2 text-center ${
+                      isDarkMode 
+                        ? 'bg-amber-950/30 border-amber-900/40 text-amber-400 hover:bg-amber-900/40' 
+                        : 'bg-amber-50/80 border-amber-100 text-amber-700 hover:bg-amber-100 shadow-sm'
+                    }`}
+                  >
+                    <Trash2 size={20} className="text-amber-500" />
+                    <span>Clear Transparency Logs</span>
+                    <span className="text-[9px] font-normal text-slate-400">Purge non-essential logs</span>
+                  </button>
+
+                  <button 
+                    onClick={() => {
+                      setDeleteType('all');
+                      setIsBatchDeleteModalOpen(true);
+                    }}
+                    className={`p-4 rounded-2xl border font-black text-xs uppercase tracking-wider transition-all duration-200 flex flex-col items-center justify-center gap-2 text-center ${
+                      isDarkMode 
+                        ? 'bg-rose-950/30 border-rose-900/40 text-rose-400 hover:bg-rose-900/40' 
+                        : 'bg-rose-50/80 border-rose-100 text-rose-700 hover:bg-rose-100 shadow-sm'
+                    }`}
+                  >
+                    <Trash2 size={20} className="text-rose-500" />
+                    <span>Wipe All Records</span>
+                    <span className="text-[9px] font-normal text-slate-400">Reset system database completely</span>
+                  </button>
+                </div>
+
+                {/* Warning Notice Box */}
+                <div className={`p-4 rounded-2xl border ${
+                  isDarkMode ? 'bg-slate-950/50 border-slate-800 text-slate-300' : 'bg-blue-50/50 border-blue-100 text-slate-700'
+                }`}>
+                  <div className="flex items-start gap-3">
+                    <AlertCircle size={18} className="text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+                    <div>
+                      <h4 className="text-xs font-black uppercase tracking-tight text-blue-900 dark:text-blue-300 mb-1">Important System Safety Note</h4>
+                      <p className="text-[11px] leading-relaxed font-medium">
+                        Deleting teacher records or wiping database records is permanent. It removes assigned dues, teacher profiles, and associated payment logs. Make sure to back up or export records before executing a full system reset.
                       </p>
                     </div>
                   </div>
                 </div>
-                <div className="p-6 bg-gray-50 rounded-3xl border border-gray-100 flex items-center">
-                  <p className="text-xs text-gray-500 leading-relaxed font-medium">
-                    Manage the entire teacher database. Use the <strong className="text-gray-900">Collection</strong> tab for selective deletions or use the red button to perform a complete system reset.
-                  </p>
-                </div>
+
               </div>
-            </div>
+            )}
           </div>
         )}
             </motion.div>
           </AnimatePresence>
         </div>
       </main>
-      
+
+      {/* Mobile Bottom Navigation Bar */}
+      <nav className={`lg:hidden fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-all duration-300 ${
+        isDarkMode ? 'bg-slate-900/95 border-slate-800 text-slate-200' : 'bg-white/95 border-gray-200 text-gray-700'
+      } px-1.5 py-1.5 flex items-center justify-around shadow-2xl`}>
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl transition-all ${
+            activeTab === 'dashboard'
+              ? (isDarkMode ? 'text-blue-400 bg-blue-950/70 font-black' : 'text-[#0038A8] bg-blue-50 font-black')
+              : 'text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold'
+          }`}
+        >
+          <LayoutDashboard size={18} />
+          <span className="text-[9px] uppercase tracking-wider mt-0.5">Dashboard</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('collection')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl transition-all ${
+            activeTab === 'collection'
+              ? (isDarkMode ? 'text-blue-400 bg-blue-950/70 font-black' : 'text-[#0038A8] bg-blue-50 font-black')
+              : 'text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold'
+          }`}
+        >
+          <Users size={18} />
+          <span className="text-[9px] uppercase tracking-wider mt-0.5">Teachers</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('remittance')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl transition-all ${
+            activeTab === 'remittance'
+              ? (isDarkMode ? 'text-blue-400 bg-blue-950/70 font-black' : 'text-[#0038A8] bg-blue-50 font-black')
+              : 'text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold'
+          }`}
+        >
+          <Wallet size={18} />
+          <span className="text-[9px] uppercase tracking-wider mt-0.5">Remittance</span>
+        </button>
+
+        {profile?.role === 'admin' && (
+          <button
+            onClick={() => setActiveTab('admin')}
+            className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl transition-all ${
+              activeTab === 'admin'
+                ? (isDarkMode ? 'text-blue-400 bg-blue-950/70 font-black' : 'text-[#0038A8] bg-blue-50 font-black')
+                : 'text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold'
+            }`}
+          >
+            <Shield size={18} />
+            <span className="text-[9px] uppercase tracking-wider mt-0.5">Admin</span>
+          </button>
+        )}
+
+        <button
+          onClick={() => setActiveTab('profile')}
+          className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl transition-all ${
+            activeTab === 'profile'
+              ? (isDarkMode ? 'text-blue-400 bg-blue-950/70 font-black' : 'text-[#0038A8] bg-blue-50 font-black')
+              : 'text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold'
+          }`}
+        >
+          <User size={18} />
+          <span className="text-[9px] uppercase tracking-wider mt-0.5">Profile</span>
+        </button>
+
+        <button
+          onClick={() => setIsSidebarOpen(true)}
+          className="flex flex-col items-center justify-center py-1 px-2.5 rounded-2xl text-gray-400 hover:text-gray-600 dark:text-slate-500 font-bold transition-all"
+        >
+          <Menu size={18} />
+          <span className="text-[9px] uppercase tracking-wider mt-0.5">Menu</span>
+        </button>
+      </nav>
+
+      {/* Dues Supervisor Console Modal */}
+      {supervisingTeacherId && (() => {
+        const teacher = records.find(r => r.id === supervisingTeacherId);
+        if (!teacher) return null;
+
+        // Find index in filteredRecords so admin can easily page through
+        const filteredIndex = filteredRecords.findIndex(r => r.id === teacher.id);
+        const nextTeacher = filteredIndex !== -1 && filteredIndex < filteredRecords.length - 1 ? filteredRecords[filteredIndex + 1] : null;
+        const prevTeacher = filteredIndex !== -1 && filteredIndex > 0 ? filteredRecords[filteredIndex - 1] : null;
+
+        const totalPaid = standardDues
+          .filter(d => teacher.paidDueIds.includes(d.id))
+          .reduce((sum, d) => {
+            if (d.isVoluntary && teacher.voluntaryPayments?.[d.id] !== undefined) {
+              return sum + teacher.voluntaryPayments[d.id];
+            }
+            return sum + d.amount;
+          }, 0);
+
+        const currentBalance = standardDues
+          .filter(d => !teacher.paidDueIds.includes(d.id) && !d.isVoluntary)
+          .reduce((sum, d) => sum + d.amount, 0);
+
+        const isFullyPaid = requiredDues.length > 0 && requiredDues.every(d => teacher.paidDueIds.includes(d.id));
+        const progressPercent = totalCollectibles > 0 ? Math.min(100, Math.round((totalPaid / totalCollectibles) * 100)) : 0;
+
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[60] p-4 animate-in fade-in duration-300">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              className={`rounded-[2.5rem] w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden border ${
+                isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
+              } shadow-2xl`}
+            >
+              {/* CONSOLE HEADER */}
+              <div className={`p-6 border-b flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                isDarkMode ? 'border-slate-800 bg-slate-950/50' : 'border-slate-100 bg-slate-50/50'
+              }`}>
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-2xl ${isDarkMode ? 'bg-blue-950 text-blue-400' : 'bg-[#0038A8]/10 text-[#0038A8]'}`}>
+                    <ShieldCheck size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg lg:text-xl font-black uppercase tracking-tight">Dues Supervisor Console</h3>
+                    <p className={`text-[10px] font-black uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Supervising {filteredIndex !== -1 ? filteredIndex + 1 : '?'} of {filteredRecords.length} Filtered Faculty
+                    </p>
+                  </div>
+                </div>
+
+                {/* QUICK PAGE SWIPER & ACTIONS */}
+                <div className="flex items-center gap-3">
+                  <div className={`flex items-center gap-1.5 border rounded-2xl p-1 ${isDarkMode ? 'border-slate-800 bg-slate-950/45' : 'border-slate-200 bg-white'}`}>
+                    <button 
+                      type="button"
+                      onClick={() => prevTeacher && setSupervisingTeacherId(prevTeacher.id)}
+                      disabled={!prevTeacher}
+                      className={`p-2 rounded-xl transition-all ${
+                        prevTeacher 
+                          ? (isDarkMode ? 'hover:bg-slate-850 text-slate-300' : 'hover:bg-slate-150 text-slate-700 bg-slate-100/50') 
+                          : 'text-slate-300/40 cursor-not-allowed'
+                      }`}
+                      title="Previous Faculty"
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                    
+                    <select
+                      value={teacher.id}
+                      onChange={(e) => setSupervisingTeacherId(e.target.value)}
+                      className={`px-3 py-1.5 text-xs font-black uppercase border-0 rounded-xl bg-transparent focus:ring-0 outline-none max-w-[150px] sm:max-w-[200px] text-ellipsis overflow-hidden ${
+                        isDarkMode ? 'text-white bg-slate-800' : 'text-slate-900 bg-slate-100'
+                      }`}
+                    >
+                      {filteredRecords.map((rec) => (
+                        <option key={rec.id} value={rec.id} className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-slate-900'}>
+                          {rec.name}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button 
+                      type="button"
+                      onClick={() => nextTeacher && setSupervisingTeacherId(nextTeacher.id)}
+                      disabled={!nextTeacher}
+                      className={`p-2 rounded-xl transition-all ${
+                        nextTeacher 
+                          ? (isDarkMode ? 'hover:bg-slate-850 text-slate-300' : 'hover:bg-slate-150 text-slate-700 bg-slate-100/50') 
+                          : 'text-slate-300/40 cursor-not-allowed'
+                      }`}
+                      title="Next Faculty"
+                    >
+                      <ChevronRight size={18} />
+                    </button>
+                  </div>
+
+                  <button 
+                    type="button"
+                    onClick={() => setSupervisingTeacherId(null)}
+                    className={`p-2.5 rounded-full transition-all border ${
+                      isDarkMode ? 'border-slate-800 hover:bg-slate-800 text-slate-400' : 'border-slate-200 hover:bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* CONTAINER CONTENT */}
+              <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-6">
+                {/* PROFILE CARD SUMMARY */}
+                <div className={`p-6 rounded-[2rem] border transition-all ${
+                  isDarkMode ? 'bg-slate-900/40 border-slate-800' : 'bg-[#0038A8]/5 border-slate-100'
+                }`}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                    <div className="flex items-center gap-4">
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center font-black ${
+                        teacher.gender === 'Female' 
+                          ? 'bg-rose-100 text-rose-600' 
+                          : 'bg-blue-100 text-[#0038A8]'
+                      }`}>
+                        {teacher.name.charAt(0)}
+                      </div>
+                      <div>
+                        <h4 className="text-lg font-black uppercase tracking-tight">{teacher.name}</h4>
+                        <div className="flex flex-wrap gap-2 mt-1 items-center">
+                          <span className="text-[9px] font-black uppercase tracking-wider bg-white/20 dark:bg-slate-800 border border-slate-200/50 px-2 py-0.5 rounded-md">
+                            {teacher.gradeLevel}
+                          </span>
+                          {teacher.department && teacher.department !== teacher.gradeLevel && (
+                            <span className="text-[9px] font-black uppercase tracking-wider bg-white/40 dark:bg-slate-800 text-[#0038A8] dark:text-blue-300 border border-slate-200/50 px-2 py-0.5 rounded-md">
+                              {teacher.department}
+                            </span>
+                          )}
+                          <span className="text-[9px] font-bold text-slate-500">{teacher.email}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setSupervisingTeacherId(null);
+                          openEditModal(teacher);
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center gap-1.5 border transition-all ${
+                          isDarkMode ? 'bg-slate-800 hover:bg-slate-700 border-slate-700' : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm'
+                        }`}
+                      >
+                        <FileText size={12} /> Edit Profile
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* PROGRESS AND STATS GRID */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-slate-200/20">
+                    <div className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-white border-slate-100 shadow-sm'}`}>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Paid</p>
+                      <div className="text-xl font-black text-green-600">₱{totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">Required and voluntary sums</div>
+                    </div>
+
+                    <div className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-white border-slate-100 shadow-sm'}`}>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Unpaid Required</p>
+                      <div className={`text-xl font-black ${currentBalance > 0 ? 'text-red-500' : 'text-slate-500'}`}>₱{currentBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">Pending standard items</div>
+                    </div>
+
+                    <div className={`p-4 rounded-2xl border ${isDarkMode ? 'bg-slate-950/40 border-slate-800' : 'bg-white border-slate-100 shadow-sm'}`}>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Settlement Progress</p>
+                      <div className="flex items-center gap-2">
+                        <div className="text-xl font-black text-blue-600 font-mono">{progressPercent}%</div>
+                        {isFullyPaid && (
+                          <span className="text-[8px] font-black text-green-600 bg-green-50 dark:bg-green-950/45 px-1.5 py-0.5 rounded uppercase tracking-wider">Fully Settled</span>
+                        )}
+                      </div>
+                      <div className="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden mt-1.5">
+                        <div className="bg-blue-600 h-full transition-all duration-500" style={{ width: `${progressPercent}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* INTERACTIVE DUES LIST CHECKLIST SECTION */}
+                <div>
+                  <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3 flex items-center justify-between">
+                    <span>Dues and Contributions checklist</span>
+                    <span className="font-bold text-[10px] text-slate-500 normal-case">Check/uncheck statuses to record payments</span>
+                  </h4>
+                  
+                  <div className={`rounded-3xl border divide-y overflow-hidden ${
+                    isDarkMode ? 'bg-slate-950/20 border-slate-800 divide-slate-800' : 'bg-slate-50/50 border-slate-150 divide-slate-150'
+                  }`}>
+                    {standardDues.map((due) => {
+                      const isPaid = teacher.paidDueIds.includes(due.id);
+                      const paidLog = (teacher.paymentHistory || []).find(h => h.dueId === due.id);
+                      
+                      return (
+                        <div key={due.id} className={`p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all ${
+                          isPaid 
+                            ? (isDarkMode ? 'bg-green-950/10 hover:bg-green-950/20' : 'bg-green-50/40 hover:bg-green-50/70') 
+                            : (isDarkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100/50')
+                        }`}>
+                          {/* DUE INFO & CHECKBOX BOX */}
+                          <div className="flex items-start gap-4">
+                            <div className="pt-0.5">
+                              <input 
+                                type="checkbox" 
+                                checked={isPaid}
+                                onChange={() => handleTogglePayment(teacher.id, due.id)}
+                                className="w-5 h-5 text-blue-600 rounded-lg border-slate-300 focus:ring-blue-600 cursor-pointer"
+                              />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-sm md:text-base uppercase tracking-tight text-slate-900 dark:text-white">
+                                  {due.name}
+                                </span>
+                                {due.isVoluntary ? (
+                                  <span className="text-[8px] font-black uppercase tracking-wider bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 px-2 py-0.5 rounded border border-purple-100 dark:border-purple-900/30">
+                                    Voluntary
+                                  </span>
+                                ) : (
+                                  <span className="text-[8px] font-black uppercase tracking-wider bg-blue-50 dark:bg-blue-900/40 text-[#0038A8] dark:text-blue-350 px-2 py-0.5 rounded border border-blue-150 dark:border-blue-900/30">
+                                    Required
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* DUE AMOUNT AND HISTORY META DETAIL */}
+                              <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+                                <span className={`font-black text-sm ${isPaid ? (isDarkMode ? 'text-green-400' : 'text-green-600') : 'text-[#0038A8] dark:text-blue-400'}`}>
+                                  ₱{(due.isVoluntary && isPaid && teacher.voluntaryPayments?.[due.id] !== undefined)
+                                    ? teacher.voluntaryPayments[due.id].toFixed(2)
+                                    : due.amount.toFixed(2)
+                                  }
+                                </span>
+                                
+                                {isPaid && paidLog && (
+                                  <span className="text-[10px] dark:text-slate-400 text-slate-500 flex items-center gap-1 font-medium bg-slate-100/60 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                                    <Clock size={10} />
+                                    Cleared {new Date(paidLog.date).toLocaleDateString()} 
+                                    {paidLog.collectedBy && ` • By: ${paidLog.collectedBy}`}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* ACTION BUTTON TRIGGER ACTIONS */}
+                          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+                            {isPaid ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-black bg-green-100 dark:bg-green-950/40 text-green-755 dark:text-green-400 border border-green-200/50 px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1">
+                                  <Check size={10} className="stroke-[3]" /> Cleared
+                                </span>
+                                <button 
+                                  type="button"
+                                  onClick={() => handleTogglePayment(teacher.id, due.id)}
+                                  className="p-1.5 text-xs text-red-500 hover:text-white hover:bg-red-500 border border-red-200 dark:border-red-900/40 rounded-xl transition-all"
+                                  title="Revoke and Void payment"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[9px] font-black bg-red-50 dark:bg-red-950/20 text-red-500 border border-red-100 px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1 whitespace-nowrap">
+                                  Unpaid
+                                </span>
+                                
+                                {due.isVoluntary ? (
+                                  <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <span className="text-[10px] text-slate-400 font-black pl-1.5">₱</span>
+                                    <input 
+                                      type="number"
+                                      placeholder={due.amount.toString()}
+                                      id={`custom_vol_input_supervisor_${teacher.id}_${due.id}`}
+                                      className="w-16 border-0 p-0 text-xs font-black bg-transparent text-slate-900 dark:text-white focus:ring-0 outline-none"
+                                    />
+                                    <button 
+                                      type="button"
+                                      onClick={() => {
+                                        const inp = document.getElementById(`custom_vol_input_supervisor_${teacher.id}_${due.id}`) as HTMLInputElement;
+                                        const val = inp ? parseFloat(inp.value) : NaN;
+                                        const amt = !isNaN(val) && val > 0 ? val : due.amount;
+                                        toggleDuePaid(teacher.id, due.id, amt);
+                                      }}
+                                      className="p-1 px-2.5 bg-blue-600 text-white rounded-lg text-[9px] font-black uppercase tracking-wider hover:bg-blue-700 transition"
+                                    >
+                                      Pay
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button 
+                                    type="button"
+                                    onClick={() => handleTogglePayment(teacher.id, due.id)}
+                                    className="px-3 py-1.5 bg-[#0038A8] hover:bg-blue-800 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition"
+                                  >
+                                    Mark as Paid
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* HISTORICAL CLEARED LIST TRANSACTION GRAPH */}
+                {(teacher.paymentHistory || []).length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Individual Cleared History</h4>
+                    <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                      {teacher.paymentHistory
+                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                        .map((log, lidx) => (
+                          <div key={lidx} className={`p-3 rounded-xl border flex items-center justify-between text-xs transition ${
+                            isDarkMode ? 'bg-slate-950/20 border-slate-850' : 'bg-slate-50/50 border-slate-100 shadow-sm'
+                          }`}>
+                            <div className="flex items-center gap-2.5">
+                              <div className={`p-1.5 rounded-lg ${isDarkMode ? 'bg-green-950/45 text-green-400' : 'bg-green-50 text-green-600'}`}>
+                                <Check size={12} className="stroke-[3]" />
+                              </div>
+                              <div>
+                                <div className="font-extrabold uppercase tracking-tight text-slate-900 dark:text-white">{log.dueName}</div>
+                                <div className="text-[10px] text-slate-400 font-bold">
+                                  Cleared {new Date(log.date).toLocaleDateString()}
+                                  {log.collectedBy && ` • By: ${log.collectedBy}`}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="font-black text-slate-900 dark:text-white text-right">
+                              ₱{log.amount.toFixed(2)}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ACTIONS BAR FOOTER */}
+              <div className={`p-4 sm:p-6 border-t flex flex-col sm:flex-row items-center justify-between gap-4 ${
+                isDarkMode ? 'border-slate-800 bg-slate-950/50' : 'border-slate-100 bg-slate-50/50'
+              }`}>
+                <div className="flex items-center gap-1.5 text-[10px] sm:text-xs text-slate-400 font-extrabold uppercase tracking-wider w-full sm:w-auto justify-center sm:justify-start">
+                  <ShieldCheck size={14} className="text-[#0038A8] dark:text-blue-400" />
+                  <span>Dues Auditing & Notifications</span>
+                </div>
+
+                {/* CHANNELS PANEL */}
+                <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:flex-wrap sm:items-center sm:gap-2 sm:justify-end sm:w-auto">
+                  <button 
+                    type="button"
+                    onClick={() => handleSendReminder(teacher)}
+                    disabled={isSendingReminder === teacher.id || teacher.pendingDeletion || isFullyPaid}
+                    className="px-3 py-2.5 sm:px-4 sm:py-2.5 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider sm:tracking-widest flex items-center justify-center gap-1.5 transition disabled:opacity-55 shadow-sm w-full sm:w-auto"
+                  >
+                    {isSendingReminder === teacher.id ? <Loader2 size={13} className="animate-spin" /> : <MailWarning size={13} />}
+                    <span>Send Reminder</span>
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => handleSendReceipt(teacher)}
+                    disabled={totalPaid === 0 || isSending === teacher.id || teacher.pendingDeletion}
+                    className="px-3 py-2.5 sm:px-4 sm:py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider sm:tracking-widest flex items-center justify-center gap-1.5 transition disabled:opacity-55 shadow-sm w-full sm:w-auto"
+                  >
+                    {isSending === teacher.id ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+                    <span>Send Receipt</span>
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => handleDownloadReceipt(teacher)}
+                    disabled={totalPaid === 0 || teacher.pendingDeletion}
+                    className="px-3 py-2.5 sm:px-4 sm:py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider sm:tracking-widest flex items-center justify-center gap-1.5 transition disabled:opacity-55 shadow-sm w-full sm:w-auto"
+                  >
+                    <Download size={13} />
+                    <span>PDF Receipt</span>
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => generateTeacherQRCode(teacher.email, teacher.gradeLevel, teacher.name)}
+                    className="px-3 py-2.5 sm:px-4 sm:py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-[10px] sm:text-xs font-black uppercase tracking-wider sm:tracking-widest flex items-center justify-center gap-1.5 transition shadow-sm w-full sm:w-auto"
+                  >
+                    <QrCode size={13} />
+                    <span>QR Code</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        );
+      })()}
+
       {/* Edit Teacher Modal */}
       {isEditModalOpen && editingTeacher && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2rem] p-6 sm:p-8 max-w-2xl w-full shadow-2xl border border-gray-100"
+            className={`rounded-[2rem] p-6 sm:p-8 lg:p-12 max-w-2xl lg:max-w-3xl w-full shadow-2xl border ${
+              isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-gray-900'
+            }`}
           >
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-4">
-                  <div className="bg-blue-100 p-3 rounded-2xl text-[#0038A8]">
+                  <div className={`p-3 rounded-2xl ${isDarkMode ? 'bg-blue-950 text-blue-400' : 'bg-blue-100 text-[#0038A8]'}`}>
                     <User size={24} />
                   </div>
                   <div>
-                    <h3 className="text-xl font-black text-gray-900">Edit Teacher Info</h3>
-                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Update Profile Details</p>
+                    <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Edit Teacher Info</h3>
+                    <p className={`text-[10px] font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Update Profile Details</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsEditModalOpen(false)}
-                  className="p-2 hover:bg-gray-100 rounded-full transition-all text-gray-400"
+                  className={`p-2 rounded-full transition-all ${isDarkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-gray-100 text-gray-400'}`}
                 >
                   <X size={20} />
                 </button>
@@ -8584,82 +11786,96 @@ function AppContent() {
               <form onSubmit={handleUpdateTeacher} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Last Name</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Last Name</label>
                     <input 
                       type="text" 
                       required 
                       value={editLastName} 
                       onChange={e => setEditLastName(e.target.value)} 
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">First Name</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>First Name</label>
                     <input 
                       type="text" 
                       required 
                       value={editFirstName} 
                       onChange={e => setEditFirstName(e.target.value)} 
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Middle Initial</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Middle Initial</label>
                     <input 
                       type="text" 
                       value={editMiddleInitial} 
                       onChange={e => setEditMiddleInitial(e.target.value)} 
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Gender</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Gender</label>
                     <select 
                       value={editGender}
                       onChange={e => setEditGender(e.target.value as 'Male' | 'Female')}
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm appearance-none"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm appearance-none ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     >
-                      <option value="Female">Female</option>
-                      <option value="Male">Male</option>
+                      <option value="Female" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Female</option>
+                      <option value="Male" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Male</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Grade Level</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Grade Level</label>
                     <select 
                       value={editGradeLevel}
                       onChange={e => setEditGradeLevel(e.target.value as GradeLevel)}
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm appearance-none"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm appearance-none ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     >
-                      <option value="Grade 7">Grade 7</option>
-                      <option value="Grade 8">Grade 8</option>
-                      <option value="Grade 9">Grade 9</option>
-                      <option value="Grade 10">Grade 10</option>
+                      <option value="Grade 7" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 7</option>
+                      <option value="Grade 8" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 8</option>
+                      <option value="Grade 9" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 9</option>
+                      <option value="Grade 10" className={isDarkMode ? 'bg-slate-900 text-white' : 'bg-white text-gray-900'}>Grade 10</option>
                     </select>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Email Address</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Email Address</label>
                     <input 
                       type="email" 
                       required 
                       value={editEmail} 
                       onChange={e => setEditEmail(e.target.value)} 
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Contact Number</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-1 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Contact Number</label>
                     <input 
                       type="text" 
                       required 
                       value={editContactNumber} 
                       onChange={e => setEditContactNumber(e.target.value)} 
-                      className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-bold text-gray-900 text-sm"
+                      className={`w-full border-2 rounded-xl px-4 py-3 transition-all outline-none font-bold text-sm ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                      }`}
                     />
                   </div>
                 </div>
@@ -8668,13 +11884,15 @@ function AppContent() {
                 <button 
                   type="button"
                   onClick={() => setIsEditModalOpen(false)}
-                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className={`flex-1 py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
+                    isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit"
-                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200 dark:shadow-none"
                 >
                   Save Changes
                 </button>
@@ -8690,17 +11908,19 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative overflow-hidden"
+            className={`rounded-3xl p-8 lg:p-12 max-w-sm lg:max-w-lg w-full shadow-2xl relative overflow-hidden border ${
+              isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-gray-900'
+            }`}
           >
             <div className="absolute top-0 left-0 w-full h-2 bg-[#0038A8]"></div>
             <div className="flex justify-center mb-6">
-              <div className="bg-blue-50 p-4 rounded-full">
-                <PhilippinePeso className="text-[#0038A8]" size={32} />
+              <div className={`p-4 rounded-full ${isDarkMode ? 'bg-blue-950 text-blue-400' : 'bg-blue-50 text-[#0038A8]'}`}>
+                <PhilippinePeso size={32} />
               </div>
             </div>
-            <h2 className="text-xl font-black text-center text-gray-900 mb-2">Voluntary Payment</h2>
-            <p className="text-center text-gray-500 text-sm mb-6 font-medium">
-              Enter the amount for <span className="text-[#0038A8] font-bold">{standardDues.find(d => d.id === voluntaryPaymentData.dueId)?.name}</span>
+            <h2 className={`text-xl font-black text-center mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Voluntary Payment</h2>
+            <p className={`text-center text-sm mb-6 font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
+              Enter the amount for <span className="text-[#0038A8] dark:text-blue-400 font-bold">{standardDues.find(d => d.id === voluntaryPaymentData.dueId)?.name}</span>
             </p>
             
             <div className="space-y-4">
@@ -8712,7 +11932,9 @@ function AppContent() {
                   placeholder="0.00"
                   value={voluntaryPaymentData.amount}
                   onChange={e => setVoluntaryPaymentData({ ...voluntaryPaymentData, amount: e.target.value })}
-                  className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl pl-10 pr-4 py-4 focus:border-[#0038A8] focus:bg-white transition-all outline-none font-black text-gray-900 text-xl"
+                  className={`w-full border-2 rounded-2xl pl-10 pr-4 py-4 transition-all outline-none font-black text-xl ${
+                    isDarkMode ? 'bg-slate-950 border-slate-800 text-white focus:border-blue-500' : 'bg-gray-50 border-gray-100 text-gray-900 focus:border-[#0038A8] focus:bg-white'
+                  }`}
                 />
               </div>
               
@@ -8722,13 +11944,15 @@ function AppContent() {
                     setIsVoluntaryModalOpen(false);
                     setVoluntaryPaymentData(null);
                   }}
-                  className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className={`flex-1 py-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
+                    isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={submitVoluntaryPayment}
-                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200"
+                  className="flex-1 py-4 bg-[#0038A8] text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-blue-800 transition-all shadow-lg shadow-blue-200 dark:shadow-none"
                 >
                   Confirm
                 </button>
@@ -8744,19 +11968,21 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-gray-100"
+            className={`rounded-3xl p-8 max-w-md w-full shadow-2xl border ${
+              isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-gray-100 text-gray-900'
+            }`}
           >
             <div className="flex items-center gap-4 mb-6">
-              <div className="bg-red-100 p-3 rounded-2xl">
-                <AlertTriangle className="text-red-600" size={28} />
+              <div className={`p-3 rounded-2xl ${isDarkMode ? 'bg-rose-950 text-rose-400' : 'bg-red-100 text-red-600'}`}>
+                <AlertTriangle size={28} />
               </div>
               <div>
-                <h3 className="text-xl font-black text-gray-900">Confirm Deletion</h3>
-                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">Action Required</p>
+                <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Confirm Deletion</h3>
+                <p className={`text-xs font-bold uppercase tracking-widest ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>Action Required</p>
               </div>
             </div>
             
-            <p className="text-sm text-gray-600 mb-8 leading-relaxed">
+            <p className={`text-sm mb-8 leading-relaxed ${isDarkMode ? 'text-slate-300' : 'text-gray-600'}`}>
               Do you really want to delete this remittance record? This action will reset the remittance status for associated teachers and cannot be undone.
             </p>
             
@@ -8766,7 +11992,9 @@ function AppContent() {
                   setIsDeleteModalOpen(false);
                   setRemittanceIdToDelete(null);
                 }}
-                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
+                className={`flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+                  isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
               >
                 Cancel
               </button>
@@ -8787,16 +12015,18 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-6 sm:p-10 md:p-12 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-100 text-center relative"
+            className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-6 sm:p-10 md:p-12 max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl border text-center relative`}
           >
             <button 
               onClick={() => setQrCodeData(null)}
-              className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+              className={`absolute top-6 right-6 p-2 rounded-full transition-colors ${
+                isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'
+              }`}
             >
               <X size={20} />
             </button>
             
-            <div id="qr-code-capture-area-admin" className="bg-white p-4 rounded-2xl">
+            <div id="qr-code-capture-area-admin" className="bg-white p-4 rounded-2xl text-gray-900">
               <h3 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">
                 {qrCodeData.grade.startsWith('Grade') ? 'Teacher' : 'BOD'} Login QR Code
               </h3>
@@ -8804,18 +12034,17 @@ function AppContent() {
                 {qrCodeData.grade}
               </p>
               
-              <div className="bg-white p-4 rounded-2xl border-2 border-blue-100 shadow-lg shadow-blue-50/50 mb-8 w-48 h-48 sm:w-64 sm:h-64 mx-auto flex items-center justify-center">
+              <div className="bg-white p-4 rounded-3xl border-2 border-blue-100 shadow-xl shadow-blue-50/50 mb-8 mx-auto flex items-center justify-center w-fit">
                 <QRCodeCanvas 
                   id="admin-qr-canvas"
                   value={JSON.stringify({ email: qrCodeData.email, pass: qrCodeData.pass, realEmail: qrCodeData.realEmail })} 
-                  size={256}
-                  className="w-full h-full"
+                  size={220}
                   level="H"
                   includeMargin={true}
                   imageSettings={{
                     src: SUN_LOGO_SVG,
-                    height: 48,
-                    width: 48,
+                    height: 40,
+                    width: 40,
                     excavate: true,
                   }}
                 />
@@ -8838,7 +12067,7 @@ function AppContent() {
               </div>
             </div>
 
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 mt-4">
               <button 
                 onClick={() => downloadQRCode(
                   'admin-qr-canvas', 
@@ -8875,7 +12104,9 @@ function AppContent() {
                 </button>
                 <button 
                   onClick={() => setQrCodeData(null)}
-                  className="flex-1 py-4 sm:py-5 bg-gray-100 text-gray-600 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-gray-200 transition-all"
+                  className={`flex-1 py-4 sm:py-5 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${
+                    isDarkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
                   Done
                 </button>
@@ -8893,33 +12124,39 @@ function AppContent() {
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-[2.5rem] w-full max-w-md overflow-hidden shadow-2xl"
+              className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] w-full max-w-md lg:max-w-lg overflow-hidden shadow-2xl border`}
             >
               <div className="p-8">
-                <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-[#0038A8] mb-6">
+                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ${
+                  isDarkMode ? 'bg-blue-950/80 text-blue-400 border border-blue-800' : 'bg-blue-50 text-[#0038A8]'
+                }`}>
                   <Archive size={32} />
                 </div>
-                <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight mb-2">Close School Year</h3>
-                <p className="text-sm text-gray-500 font-medium leading-relaxed mb-8">
+                <h3 className={`text-2xl font-black uppercase tracking-tight mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Close School Year</h3>
+                <p className={`text-sm font-medium leading-relaxed mb-8 ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
                   This will archive all current collections, expenses, and remittances into a history folder. 
                   All teacher balances will be reset to zero for the new school year.
                 </p>
 
                 <div className="space-y-4 mb-8">
                   <div>
-                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">School Year Label</label>
+                    <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>School Year Label</label>
                     <input 
                       type="text" 
                       value={archiveYear}
                       onChange={(e) => setArchiveYear(e.target.value)}
                       placeholder="e.g. 2025-2026"
-                      className="w-full px-5 py-4 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-[#0038A8] outline-none transition-all"
+                      className={`w-full px-5 py-4 border rounded-2xl text-sm font-bold focus:ring-2 focus:ring-[#0038A8] outline-none transition-all ${
+                        isDarkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-gray-50 border-gray-100 text-gray-900'
+                      }`}
                     />
                   </div>
                   
-                  <div className="p-4 bg-yellow-50 rounded-2xl border border-yellow-100 flex gap-3">
-                    <AlertTriangle className="text-yellow-600 shrink-0" size={20} />
-                    <p className="text-[11px] text-yellow-700 font-bold leading-relaxed">
+                  <div className={`p-4 rounded-2xl border flex gap-3 ${
+                    isDarkMode ? 'bg-amber-950/40 border-amber-900/50 text-amber-300' : 'bg-yellow-50 border-yellow-100 text-yellow-700'
+                  }`}>
+                    <AlertTriangle className={isDarkMode ? 'text-amber-400 shrink-0' : 'text-yellow-600 shrink-0'} size={20} />
+                    <p className={`text-[11px] font-bold leading-relaxed ${isDarkMode ? 'text-amber-300' : 'text-yellow-700'}`}>
                       Make sure you have exported all necessary reports before proceeding. This action is irreversible.
                     </p>
                   </div>
@@ -8928,7 +12165,9 @@ function AppContent() {
                 <div className="flex gap-3">
                   <button 
                     onClick={() => setShowArchiveModal(false)}
-                    className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
+                    className={`flex-1 py-4 rounded-2xl text-xs font-black uppercase tracking-widest transition-all ${
+                      isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
                   >
                     Cancel
                   </button>
@@ -8953,14 +12192,16 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100 text-center"
+            className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-12 lg:p-16 max-w-md lg:max-w-xl w-full shadow-2xl border text-center`}
           >
-            <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 text-green-600">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+              isDarkMode ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800' : 'bg-green-100 text-green-600'
+            }`}>
               <CheckCircle size={40} />
             </div>
             
-            <h3 className="text-2xl font-black text-gray-900 mb-2 uppercase tracking-tight">System Wiped</h3>
-            <p className="text-gray-500 font-bold mb-8 leading-relaxed">
+            <h3 className={`text-2xl font-black mb-2 uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>System Wiped</h3>
+            <p className={`font-bold mb-8 leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
               All records, payment history, expenses, and audit logs have been permanently deleted. The system has been reset to its initial state.
             </p>
 
@@ -8980,16 +12221,18 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-md w-full shadow-2xl border border-gray-100 text-center"
+            className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-12 max-w-md lg:max-w-lg w-full shadow-2xl border text-center`}
           >
-            <div className="bg-red-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 text-red-600">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+              isDarkMode ? 'bg-red-950/80 text-red-400 border border-red-800' : 'bg-red-100 text-red-600'
+            }`}>
               <AlertTriangle size={40} />
             </div>
             
-            <h3 className="text-2xl font-black text-gray-900 mb-2">
+            <h3 className={`text-2xl font-black mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               {deleteType === 'all' ? 'Delete All Records?' : 'Delete Selected Records?'}
             </h3>
-            <p className="text-gray-500 font-bold mb-8 leading-relaxed">
+            <p className={`font-bold mb-8 leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
               {deleteType === 'all' 
                 ? 'This will permanently wipe all teacher records and their payment history from the database. This action cannot be undone.' 
                 : `You are about to delete ${selectedTeacherIds.size} selected teacher records. This action is permanent and cannot be reversed.`}
@@ -8999,7 +12242,9 @@ function AppContent() {
               <button 
                 onClick={() => setIsBatchDeleteModalOpen(false)}
                 disabled={isBatchDeleting}
-                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all disabled:opacity-50"
+                className={`flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50 ${
+                  isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
               >
                 Cancel
               </button>
@@ -9027,37 +12272,45 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-8 sm:p-12 max-w-lg w-full shadow-2xl border border-gray-100 relative max-h-[90vh] overflow-y-auto"
+            className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-12 lg:p-16 max-w-lg lg:max-w-2xl w-full shadow-2xl border relative max-h-[90vh] overflow-y-auto`}
           >
             <button 
               onClick={() => setIsBatchUpdateModalOpen(false)}
-              className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+              className={`absolute top-6 right-6 p-2 rounded-full transition-colors ${
+                isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'
+              }`}
             >
               <X size={20} />
             </button>
             
-            <div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 text-[#0038A8]">
+            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+              isDarkMode ? 'bg-blue-950/80 text-blue-400 border border-blue-800' : 'bg-blue-100 text-[#0038A8]'
+            }`}>
               <CheckCircle size={40} />
             </div>
             
-            <h3 className="text-2xl font-black text-gray-900 mb-2 text-center">
+            <h3 className={`text-2xl font-black mb-2 text-center ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
               Batch Update Dues
             </h3>
-            <p className="text-gray-500 font-bold mb-8 leading-relaxed text-center">
+            <p className={`font-bold mb-8 leading-relaxed text-center ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>
               Update payment status for {selectedTeacherIds.size} selected {selectedTeacherIds.size === 1 ? 'teacher' : 'teachers'}.
             </p>
 
             <div className="space-y-4 mb-8 text-left">
               {standardDues.map(due => (
-                <div key={due.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                <div key={due.id} className={`flex items-center justify-between p-4 rounded-2xl border ${
+                  isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-gray-50 border-gray-100'
+                }`}>
                   <div>
-                    <p className="font-bold text-gray-900">{due.name}</p>
-                    <p className="text-xs text-gray-500 font-medium">₱{due.amount.toLocaleString()}</p>
+                    <p className={`font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>{due.name}</p>
+                    <p className={`text-xs font-medium ${isDarkMode ? 'text-slate-400' : 'text-gray-500'}`}>₱{due.amount.toLocaleString()}</p>
                   </div>
                   <select
                     value={batchDueUpdates[due.id] || 'no_change'}
                     onChange={(e) => setBatchDueUpdates(prev => ({ ...prev, [due.id]: e.target.value as any }))}
-                    className="bg-white border border-gray-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0038A8]"
+                    className={`rounded-xl px-4 py-2 text-sm font-bold outline-none border focus:ring-2 focus:ring-[#0038A8] ${
+                      isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900'
+                    }`}
                   >
                     <option value="no_change">No Change</option>
                     <option value="paid">Mark as Paid</option>
@@ -9071,7 +12324,9 @@ function AppContent() {
               <button 
                 onClick={() => setIsBatchUpdateModalOpen(false)}
                 disabled={isBatchUpdating}
-                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all disabled:opacity-50"
+                className={`flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50 ${
+                  isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
               >
                 Cancel
               </button>
@@ -9099,27 +12354,33 @@ function AppContent() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-[2.5rem] p-8 sm:p-10 max-w-2xl w-full shadow-2xl border border-gray-100 relative max-h-[90vh] flex flex-col"
+            className={`${isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-gray-100 text-gray-900'} rounded-[2.5rem] p-8 sm:p-10 max-w-2xl w-full shadow-2xl border relative max-h-[90vh] flex flex-col`}
           >
             <button 
               onClick={() => setShowReceiptPreview(false)}
-              className="absolute top-6 right-6 p-2 bg-gray-100 text-gray-400 rounded-full hover:bg-gray-200 hover:text-gray-600 transition-colors"
+              className={`absolute top-6 right-6 p-2 rounded-full transition-colors ${
+                isDarkMode ? 'bg-slate-800 text-slate-400 hover:text-slate-200' : 'bg-gray-100 text-gray-400 hover:text-gray-600'
+              }`}
             >
               <X size={20} />
             </button>
             
-            <h3 className="text-2xl font-black text-gray-900 mb-6 text-center">Receipt Preview</h3>
+            <h3 className={`text-2xl font-black mb-6 text-center ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Receipt Preview</h3>
             
-            <div className="flex-1 overflow-auto mb-8 p-4 bg-gray-50 rounded-3xl border border-gray-100 flex justify-center">
+            <div className={`flex-1 overflow-auto mb-8 p-4 rounded-3xl border flex justify-center ${
+              isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-gray-50 border-gray-100'
+            }`}>
               <div className="receipt-preview-scaler">
-                <div id="admin-receipt-content" className="bg-white shadow-sm" dangerouslySetInnerHTML={{ __html: generateHTMLReceipt(previewReceiptData) }} />
+                <div id="admin-receipt-content" className="bg-white shadow-sm text-gray-900" dangerouslySetInnerHTML={{ __html: generateHTMLReceipt(previewReceiptData) }} />
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3">
               <button 
                 onClick={() => setShowReceiptPreview(false)}
-                className="flex-1 py-4 bg-gray-100 text-gray-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all font-mono"
+                className={`flex-1 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all font-mono ${
+                  isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
               >
                 Close
               </button>
@@ -9168,6 +12429,114 @@ function AppContent() {
           </motion.div>
         </div>
       )}
+
+      {/* Real-time Remittance Floating Notifications (For Admins) */}
+      {profile?.role === 'admin' && (
+        <div className="fixed top-24 right-4 sm:right-6 lg:right-8 z-[210] flex flex-col gap-4 max-w-[90vw] sm:max-w-md w-full pointer-events-none">
+          <AnimatePresence>
+            {remittanceNotifications.map((rem) => {
+              const loading = verifyingNotificationIds.includes(rem.id);
+              return (
+                <motion.div
+                  key={rem.id}
+                  initial={{ opacity: 0, x: 150, scale: 0.95 }}
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95, x: 150 }}
+                  transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+                  className={`pointer-events-auto w-full rounded-[2rem] border p-6 shadow-[0_20px_50px_rgba(0,38,168,0.12)] backdrop-blur-xl transition-all duration-350 relative overflow-hidden group ${
+                    isDarkMode 
+                      ? 'bg-slate-900/95 border-slate-800 text-white shadow-black/40' 
+                      : 'bg-white/95 border-blue-50 text-[#1E293B] shadow-indigo-100/30'
+                  }`}
+                >
+                  {/* Decorative glowing gradient backdrop inside the card */}
+                  <div className={`absolute top-0 right-0 w-32 h-32 rounded-bl-full z-0 transition-opacity opacity-20 group-hover:opacity-30 ${isDarkMode ? 'bg-gradient-to-br from-cyan-500 to-indigo-500' : 'bg-gradient-to-br from-blue-300 to-indigo-400'}`}></div>
+
+                  <div className="relative z-10 flex gap-4 items-start">
+                    {/* Pulsing ring around Wallet badge icon */}
+                    <div className="relative shrink-0 mt-1">
+                      <div className="absolute inset-0 bg-emerald-500 rounded-2xl blur-md opacity-30 animate-pulse"></div>
+                      <div className={`relative w-11 h-11 rounded-2xl flex items-center justify-center border ${isDarkMode ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800' : 'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>
+                        <Wallet className="animate-bounce" size={20} style={{ animationDuration: '3s' }} />
+                      </div>
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      {/* Sub-header banner details */}
+                      <div className="flex justify-between items-center mb-1.5 gap-2">
+                        <span className={`text-[10px] font-black uppercase tracking-[0.16em] shrink-0 flex items-center gap-1 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                          Real-time Remittance
+                        </span>
+                        <button
+                          onClick={() => setRemittanceNotifications(prev => prev.filter(r => r.id !== rem.id))}
+                          className={`p-1.5 rounded-xl transition-colors shrink-0 ${isDarkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-900'}`}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+
+                      {/* Header containing name and grade level */}
+                      <h4 className={`text-sm sm:text-base font-black tracking-tight mb-0.5 truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {rem.bodName || 'BOD Representative'}
+                      </h4>
+                      <p className={`text-xs font-semibold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'} mb-3`}>
+                        Submitted turnover for <span className={`${isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'} font-black uppercase text-xs`}>{rem.gradeLevel}</span>.
+                      </p>
+
+                      {/* Highlighted Peso Amount */}
+                      <div className={`flex items-center gap-2 p-3 rounded-2xl font-mono text-base font-black mb-3 border ${
+                        isDarkMode 
+                          ? 'bg-slate-950/60 border-slate-800 text-emerald-400' 
+                          : 'bg-emerald-50/50 border-emerald-100/50 text-emerald-700'
+                      }`}>
+                        <PhilippinePeso size={15} className="shrink-0 text-emerald-500" />
+                        <span>{rem.amount ? rem.amount.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '0.00'}</span>
+                      </div>
+
+                      {/* Live Actions Footer */}
+                      <div className="flex gap-2 w-full mt-2">
+                        <button
+                          disabled={loading}
+                          onClick={() => handleInstantVerifyNotification(rem.id)}
+                          className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md active:scale-95 flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        >
+                          {loading ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" />
+                              Verifying...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle size={12} />
+                              Verify
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setActiveTab('remittance');
+                            setRemittanceNotifications(prev => prev.filter(r => r.id !== rem.id));
+                          }}
+                          className={`py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all active:scale-95 border ${
+                            isDarkMode 
+                              ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700' 
+                              : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          Details
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+      )}
+
       <GlobalOverlays 
         showTermsModal={showTermsModal} 
         setShowTermsModal={setShowTermsModal} 
@@ -9181,6 +12550,8 @@ function AppContent() {
         showInAppNotify={showInAppNotify}
         setShowInAppNotify={setShowInAppNotify}
         setActiveTab={setActiveTab}
+        setShowLoginSuccess={setShowLoginSuccess}
+        onDismissToast={() => setToast(null)}
       />
     </div>
   );

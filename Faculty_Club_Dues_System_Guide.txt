@@ -1,0 +1,44 @@
+Faculty Club Dues Management System - Comprehensive Overview
+(Designed for NotebookLM Analysis & Video Explainer Generation)
+
+1. INTRODUCTION
+The Faculty Club Dues Management System is a modern, comprehensive web-based application designed to streamline the collection, tracking, and reporting of faculty dues and contributions. It eliminates manual ledger keeping by providing dedicated, real-time portals for Administrators, Board of Directors (BOD), and Teachers.
+
+2. USER ROLES & ACCESS
+- Administrators (Admin/Executive): Full system control, financial oversight, user management, and global reporting.
+- Board of Directors (BOD): Grade-level representatives who collect payments from teachers within their departments and periodically remit (turn over) funds to the administration.
+- Teachers (Faculty): General members who can view their individual payment statuses, download receipts, and track personal payment logs.
+- Authentication Modes: Secure login via Google Account, Email/Password, and an integrated "QR Code Login" for instant access without entering credentials.
+
+3. CORE FEATURES & MODULES
+
+A. Dashboard & Analytics
+- Real-time Financial Statistics: Live calculation of Total Collected, Expected Balances, and Total Remitted Amounts.
+- Progress Tracking: Visual progress bars for each specific due (e.g., showing what percentage of the faculty has paid the "Annual Membership Fee").
+- Status Categorization: Automatic tagging of teachers as "Fully Paid", "Partial", or "Pending" based on standard and voluntary requirements.
+
+B. Payment & Contribution Management
+- Flexible Dues Architecture: Admins can define "Standard Dues" (required fees) and "Voluntary Contributions" (optional flexible amounts like calamity funds or donations).
+- Batch Updating: Admins can seamlessly select multiple teachers and mark specific dues as paid simultaneously.
+- Remittance Verification Workflow: Instead of direct Admin entry, BODs log their collections by grade level and submit "Remittances". Admins then review and "Verify" these remittances, ensuring a secure two-step financial reconciliation.
+
+C. Automated Receipts & Communications
+- Unique Reference Numbers: The system automatically generates verifiable Reference Numbers for every official transaction.
+- Smart Batch Emailing: Admins can batch-send Official electronic receipts to teachers' inboxes. The system uses an optimized pacing algorithm (processing in batches of 5 with 1.5-second delays) to ensure reliable delivery without hitting server rate limits.
+- Remittance Acceptance Emails: When an Admin verifies a BOD's remittance, the system sends an automated acceptance email to the BOD as proof of turnover.
+- Downloadable Image Receipts: Teachers and Admins can export beautifully formatted PNG images of official receipts with one click.
+
+D. Enterprise-Grade Reporting & Exporting
+- Formatted Global Payment Logs (DOCX): Admins can click a single button to generate a highly formatted, print-ready Word Document (13" x 8.5" landscape). This log accurately groups all payments by faculty member, complete with dynamic custom school headers and footers.
+- Complete Excel Export: Comprehensive data export of the entire database to CSV/Excel for external accounting.
+- Personal Payment Logs: Teachers have self-service tools to export their own individual payment history seamlessly.
+
+E. Faculty Data Management
+- Excel/CSV Import Onboarding: Rapidly onboard the entire school faculty by uploading a single spreadsheet.
+- Batch Deletion & Archiving: Bulk management tools for easy cleanup when transitioning to a new academic or financial year.
+
+4. KEY WORKFLOWS FOR THE VIDEO EXPLAINER
+- The Remittance Workflow: Highlight the secure chain of custody—a BOD collects cash, submits a digital remittance report, and the Admin approves it, triggering automated emails and updating all associated teachers' balances at once.
+- The 1-Click Batch Emailing: Showcase the efficiency of selecting dozens of teachers and sending them all official, personalized digital receipts simultaneously with built-in retry logic.
+- The Quick QR Login: Demonstrate how a teacher bypasses typing passwords by simply scanning their personalized QR code to instantly access their payment dashboard.
+- The Automated Print-Ready Log: Emphasize the automated creation of the Landscape DOCX Report that instantly does the work of manually formatting an extensive ledger.

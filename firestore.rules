@@ -127,13 +127,12 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow create: if isAuthenticated() && (
+      allow read: if isAdmin() || (isAuthenticated() && request.auth.uid == userId);
+      allow create: if isAdmin() || (isAuthenticated() && (
         request.auth.uid == userId || 
-        isAdmin() || 
         (request.resource.data.role == 'teacher' && (request.auth.token.email == request.resource.data.email || (getUserData() != null && getUserData().email == request.resource.data.email)))
-      );
-      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      ));
+      allow update: if isAdmin() || (isAuthenticated() && request.auth.uid == userId);
       allow delete: if isAdmin();
     }
 
@@ -184,6 +183,37 @@ service cloud.firestore {
       allow create: if isAuthenticated();
       allow update: if false;
       allow delete: if isAdmin();
+    }
+
+    match /archives/{archiveId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+      
+      match /teachers/{docId} {
+        allow read, write: if isAdmin();
+      }
+      match /expenses/{docId} {
+        allow read, write: if isAdmin();
+      }
+      match /remittances/{docId} {
+        allow read, write: if isAdmin();
+      }
+    }
+
+    match /profile_change_requests/{requestId} {
+      allow read: if isAuthenticated() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update: if isAuthenticated() && (isAdmin() || (resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])));
+      allow delete: if isAdmin();
+    }
+
+    match /login_requests/{requestId} {
+      allow create: if true;
+      allow read: if true;
+      allow update: if isAdmin();
+      allow delete: if isAdmin() || (resource.data.status != 'pending');
     }
 
     match /settings/global {

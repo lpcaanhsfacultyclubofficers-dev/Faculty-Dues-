@@ -114,6 +114,19 @@
         "adminName": { "type": "string" }
       },
       "required": ["amount", "timestamp", "adminId"]
+    },
+    "LoginRequest": {
+      "title": "LoginRequest",
+      "description": "A push approval request for QR login",
+      "type": "object",
+      "properties": {
+        "teacherEmail": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "approved", "denied"] },
+        "deviceId": { "type": "string" }
+      },
+      "required": ["teacherEmail", "status", "requestedAt"]
     }
   },
   "firestore": {
@@ -144,6 +157,10 @@
     "/audit_logs/{logId}": {
       "schema": "AuditLog",
       "description": "System activity logs"
+    },
+    "/login_requests/{requestId}": {
+      "schema": "LoginRequest",
+      "description": "QR Login push approval requests"
     },
     "/settings/{settingId}": {
       "schema": "object",
