@@ -18,11 +18,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Install dependencies & build Web app
         run: |
-          npm ci
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Set up Java JDK 17
