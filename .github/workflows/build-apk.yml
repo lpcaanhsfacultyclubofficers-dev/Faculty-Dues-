@@ -1,4 +1,4 @@
-name: Build Android APK from PWA
+name: Build Android APK
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies & build Web PWA
+      - name: Install dependencies & build Web app
         run: |
           npm ci
           npm run build
@@ -30,58 +30,23 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          # CRITICAL: Do NOT set cache: 'gradle' here because there are no gradle files in the root repo!
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Bubblewrap CLI
-        run: npm install -g @bubblewrap/cli
-
-      - name: Generate Android TWA Project and Build APK
+      - name: Add Android Platform & Sync Capacitor
         run: |
-          # Create twa-manifest.json if not present
-          cat << 'EOF' > twa-manifest.json
-          {
-            "packageId": "com.lpcaanhs.facultyclub",
-            "host": "ais-pre-yybqppp7grceyg3uc6yrnj-666096907420.asia-east1.run.app",
-            "name": "LPCAANHS Faculty Club Management Portal",
-            "launcherName": "Faculty Club",
-            "themeColor": "#0038A8",
-            "navigationColor": "#001233",
-            "backgroundColor": "#001233",
-            "enableNotifications": true,
-            "startUrl": "/",
-            "iconUrl": "https://ais-pre-yybqppp7grceyg3uc6yrnj-666096907420.asia-east1.run.app/icon-512-v2.png",
-            "maskableIconUrl": "https://ais-pre-yybqppp7grceyg3uc6yrnj-666096907420.asia-east1.run.app/icon-512-v2.png",
-            "appVersionName": "1.0.0",
-            "appVersionCode": 1,
-            "shortcuts": [],
-            "generatorApp": "bubblewrap-cli",
-            "webManifestUrl": "https://ais-pre-yybqppp7grceyg3uc6yrnj-666096907420.asia-east1.run.app/manifest.json",
-            "fallbackType": "customtabs",
-            "features": {},
-            "alphaDependencies": {
-              "enabled": false
-            },
-            "enableSiteSettingsShortcut": "true",
-            "isChromeOSOnly": false,
-            "orientation": "default",
-            "fingerprints": [],
-            "additionalTrustedOrigins": []
-          }
-          EOF
+          npx cap add android || true
+          npx cap sync android
 
-          # Initialize Android project using twa-manifest.json
-          npx @bubblewrap/cli init --manifest=twa-manifest.json --directory=android-twa
-          cd android-twa
-          npx @bubblewrap/cli build
+      - name: Build Android Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Faculty-Club-PWA.apk
-          path: |
-            android-twa/*.apk
-            android-twa/app/build/outputs/apk/release/*.apk
-            android-twa/app/build/outputs/apk/debug/*.apk
+          name: Faculty-Club-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
