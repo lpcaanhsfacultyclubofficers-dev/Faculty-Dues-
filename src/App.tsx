@@ -6208,14 +6208,20 @@ function AppContent() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.5, ease: "easeOut" }}
-          className="bg-white/90 backdrop-blur-2xl p-6 sm:p-10 md:p-14 lg:p-16 rounded-[3rem] shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] max-w-md lg:max-w-xl w-full text-center border border-white/60 relative z-10 overflow-hidden"
+          className={`${
+            isDarkMode 
+              ? 'bg-slate-900/95 border-slate-800 text-slate-100 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.7)]' 
+              : 'bg-white/95 border-white/60 text-gray-900 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)]'
+          } backdrop-blur-2xl p-6 sm:p-10 md:p-14 lg:p-16 rounded-[3rem] max-w-md lg:max-w-xl w-full text-center border relative z-10 overflow-hidden`}
         >
           {/* Card Bubbles */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
             {CARD_PARTICLES.map((p) => (
               <motion.div
                 key={p.id}
-                className="absolute rounded-full bg-blue-400/10 border border-blue-400/20 shadow-[inset_0_2px_4px_rgba(255,255,255,0.5)]"
+                className={`absolute rounded-full ${
+                  isDarkMode ? 'bg-blue-400/5 border-blue-400/10' : 'bg-blue-400/10 border-blue-400/20'
+                } shadow-[inset_0_2px_4px_rgba(255,255,255,0.2)]`}
                 style={{
                   width: p.size,
                   height: p.size,
@@ -6251,21 +6257,21 @@ function AppContent() {
             FACULTY CLUB
           </h1>
           <div className="flex items-center justify-center gap-3 mb-8 sm:mb-12">
-            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-800' : 'bg-blue-200'}`}></div>
+            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-500/40' : 'bg-blue-200'}`}></div>
             <p className={`font-black text-[10px] sm:text-xs uppercase tracking-[0.3em] ${
               isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
             }`}>Dues Management</p>
-            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-800' : 'bg-blue-200'}`}></div>
+            <div className={`h-px w-8 ${isDarkMode ? 'bg-blue-500/40' : 'bg-blue-200'}`}></div>
           </div>
           
           <div className="space-y-4 sm:space-y-6">
             <div className={`rounded-[2rem] p-6 sm:p-10 border shadow-sm ${
-              isDarkMode ? 'bg-slate-900/90 border-slate-800 text-slate-100' : 'bg-gray-50/80 border-gray-100/50 text-gray-900'
+              isDarkMode ? 'bg-slate-800/80 border-slate-700/60 text-slate-100' : 'bg-gray-50/80 border-gray-100/50 text-gray-900'
             }`}>
               <div className="flex items-center justify-center gap-2 mb-6 sm:mb-8">
                 <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
                 <p className={`text-[10px] uppercase tracking-widest font-black ${
-                  isDarkMode ? 'text-slate-400' : 'text-gray-400'
+                  isDarkMode ? 'text-slate-300' : 'text-gray-400'
                 }`}>Secure Portal Access</p>
               </div>
               
@@ -6287,16 +6293,16 @@ function AppContent() {
                 </button>
 
                 <div className="relative flex items-center py-4 sm:py-6">
-                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-200/60'}`}></div>
-                  <span className={`flex-shrink-0 mx-4 text-[10px] font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-slate-500' : 'text-gray-300'}`}>Quick Login</span>
-                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-200/60'}`}></div>
+                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-700' : 'border-gray-200/60'}`}></div>
+                  <span className={`flex-shrink-0 mx-4 text-[10px] font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-slate-400' : 'text-gray-400'}`}>Quick Login</span>
+                  <div className={`flex-grow border-t ${isDarkMode ? 'border-slate-700' : 'border-gray-200/60'}`}></div>
                 </div>
 
                 <button 
                   onClick={() => setShowScanner(true)}
                   className={`w-full py-4 sm:py-5 px-6 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest transition-all duration-300 flex items-center justify-center gap-3 group border-2 ${
                     isDarkMode 
-                      ? 'bg-slate-800 text-slate-100 border-slate-700 hover:bg-slate-700 hover:text-white' 
+                      ? 'bg-slate-700/80 text-white border-slate-600 hover:bg-slate-600' 
                       : 'bg-white text-gray-700 border-gray-100 hover:border-blue-200 hover:bg-blue-50/30 hover:text-[#0038A8]'
                   }`}
                 >
@@ -6311,7 +6317,7 @@ function AppContent() {
             </div>
             
             <p className={`text-[10px] sm:text-xs font-bold px-4 leading-relaxed relative z-20 ${
-              isDarkMode ? 'text-slate-400' : 'text-gray-400'
+              isDarkMode ? 'text-slate-300' : 'text-gray-500'
             }`}>
               By signing in, you agree to the Faculty Club's{' '}
               <button 
@@ -6321,8 +6327,8 @@ function AppContent() {
                   e.stopPropagation();
                   setShowTermsModal(true);
                 }}
-                className={`hover:underline transition-all cursor-pointer relative z-30 ${
-                  isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+                className={`hover:underline transition-all cursor-pointer relative z-30 font-extrabold ${
+                  isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-[#0038A8] hover:text-blue-900'
                 }`}
               >
                 terms of service
@@ -6335,16 +6341,18 @@ function AppContent() {
                   e.stopPropagation();
                   setShowTermsModal(true);
                 }}
-                className={`hover:underline transition-all cursor-pointer relative z-30 ${
-                  isDarkMode ? 'text-blue-400' : 'text-[#0038A8]'
+                className={`hover:underline transition-all cursor-pointer relative z-30 font-extrabold ${
+                  isDarkMode ? 'text-blue-400 hover:text-blue-300' : 'text-[#0038A8] hover:text-blue-900'
                 }`}
               >
                 data privacy guidelines
               </button>.
             </p>
 
-            <div className="mt-10 pt-8 border-t border-gray-100/60">
-              <p className="text-[10px] text-gray-400 uppercase tracking-[0.3em] font-black">
+            <div className={`mt-10 pt-8 border-t ${isDarkMode ? 'border-slate-800' : 'border-gray-100/60'}`}>
+              <p className={`text-[10px] uppercase tracking-[0.3em] font-black ${
+                isDarkMode ? 'text-slate-400' : 'text-gray-400'
+              }`}>
                 Las Piñas CAA National High School
               </p>
             </div>
