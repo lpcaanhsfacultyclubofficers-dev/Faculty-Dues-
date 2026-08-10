@@ -51,8 +51,8 @@ jobs:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx2048m"
         run: |
           cd android
-          chmod +x gradlew
-          ./gradlew wrapper --gradle-version 8.7 || true
+          mkdir -p gradle/wrapper
+          curl -sSL https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
           mkdir -p ../output-apk
