@@ -25,12 +25,19 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 
-// Initialize with modern persistent local cache (IndexedDB) for robust offline navigation
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-}, firebaseConfig.firestoreDatabaseId);
+let dbInstance;
+try {
+  dbInstance = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  }, firebaseConfig.firestoreDatabaseId);
+} catch (err) {
+  console.warn("Persistent local cache initialization warning, falling back to standard memory cache:", err);
+  dbInstance = initializeFirestore(app, {}, firebaseConfig.firestoreDatabaseId);
+}
+
+export const db = dbInstance;
 
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
