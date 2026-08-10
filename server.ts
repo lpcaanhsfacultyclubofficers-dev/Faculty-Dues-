@@ -286,6 +286,23 @@ async function startServer() {
     res.json({ success: true, count: sendAttempts.length });
   });
 
+  // Explicitly serve public assets with CORS and exact MIME types
+  app.use(express.static(path.join(process.cwd(), "public"), {
+    maxAge: "1d",
+    setHeaders: (res, filePath) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      if (filePath.endsWith(".png")) {
+        res.setHeader("Content-Type", "image/png");
+      } else if (filePath.endsWith(".json")) {
+        res.setHeader("Content-Type", "application/json");
+      } else if (filePath.endsWith(".js")) {
+        res.setHeader("Content-Type", "application/javascript");
+      }
+    }
+  }));
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
