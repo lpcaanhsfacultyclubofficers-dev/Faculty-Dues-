@@ -1,0 +1,26 @@
+{
+  "name": "LPCAANHS Faculty Club Management Portal",
+  "short_name": "Faculty Club",
+  "description": "Las Piñas CAA National High School Faculty Club Dues & Financial Management Portal",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#001233",
+  "theme_color": "#0038A8",
+  "icons": [
+    {
+      "src": "/icon-192-v2.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512-v2.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

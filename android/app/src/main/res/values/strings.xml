@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LPCAANHS Faculty Club Management Portal</string>
+    <string name="title_activity_main">LPCAANHS Faculty Club Management Portal</string>
+    <string name="package_name">com.lpcaanhs.facultyclub</string>
+    <string name="custom_url_scheme">com.lpcaanhs.facultyclub</string>
+</resources>
